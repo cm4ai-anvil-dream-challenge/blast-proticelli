@@ -357,6 +357,9 @@ def main():
             )
 
         model = Model(**checkpoint_paths)
+        # ProtiCelli picks CUDA, then Apple MPS, then CPU. Log the choice so a
+        # silent fall back to the CPU shows in every run log.
+        print(f"ProtiCelli device: {model.device}")
         output = model.predict(
             images=images,
             protein_names=[key for _, key, _ in to_predict],

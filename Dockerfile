@@ -31,7 +31,7 @@ RUN apt-get update \
 COPY . /tmp/build
 RUN pip install --no-cache-dir /tmp/build \
  && mkdir -p /app \
- && cp /tmp/build/run_inference.py /tmp/build/protein_predictor.py /tmp/build/pipeline_checks.py /app/ \
+ && cp /tmp/build/run_inference.py /tmp/build/protein_predictor.py /tmp/build/image_scaling.py /tmp/build/pipeline_checks.py /app/ \
  && rm -rf /tmp/build
 
 # Build-time checks: fail the build, not a later Terra run, if a required

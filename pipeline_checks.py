@@ -2,7 +2,8 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from tifffile import imread
+# skimage reads PNG and TIFF alike (tifffile rejects PNG, the challenge format).
+from skimage.io import imread
 
 def _check_array(
     img,

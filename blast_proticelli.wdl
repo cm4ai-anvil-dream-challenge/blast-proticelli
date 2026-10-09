@@ -92,7 +92,7 @@ task predict {
     >>>
 
     output {
-        Array[File] predictions = glob("out/*.tiff")
+        Array[File] predictions = glob("out/*.png")
         File prediction_results = "out/prediction_results.tsv"
     }
 

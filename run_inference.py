@@ -8,10 +8,11 @@ protein_predictor.py (local BLAST + local gene map only, no network), and
 runs ProtiCelli on every record whose predicted HGNC symbol is in the
 model's vocabulary.
 
-Inputs are assumed to already meet ProtiCelli's requirements (normalized
-single-channel images, matching H/W) and protein_predictor's requirements
-(single-record FASTA). Malformed inputs fail loudly rather than being
-validated and filtered here.
+Reference images are the challenge's single-channel 8-bit PNGs (512 x 512,
+0 to 255). image_scaling.py normalizes them with ProtiCelli's own
+ImageNormalizer and maps each prediction back to 0 to 255 (see its
+docstring). FASTA files must hold a single record; the header is ignored.
+Malformed inputs fail loudly rather than being validated and filtered here.
 
 Everything the model needs at runtime ships in one weights zip
 (--weights_zip), built with scripts/build_weights_zip.sh:
@@ -23,7 +24,7 @@ Everything the model needs at runtime ships in one weights zip
         reference/human_gene_map.zip    from build_human_gene_map.sh
 
 Outputs, all written flat into --output_dir:
-    {prediction_id}.tiff       one per record that could be predicted
+    {prediction_id}.png        one per record that could be predicted (8-bit, 0 to 255)
     prediction_results.tsv     one row per input record, predicted or not
 """
 
@@ -37,9 +38,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from skimage.io import imsave
-
-import pipeline_checks as check
+import image_scaling as isc
 import protein_predictor as pp
 from proticelli import Model
 
@@ -251,6 +250,13 @@ def main():
             "output_file": "",
             **{k: prediction.get(k) for k in PREDICTOR_FIELDS},
             "predictor_error": prediction.get("error", ""),
+            # Filled in for predicted records (see step 3).
+            "nucleus_max": "",
+            "gain_microtubules": "",
+            "gain_nucleus": "",
+            "gain_er": "",
+            "prediction_max": "",
+            "output_max": "",
             "cell_line": args.cell_line or "",
             "seed": args.seed,
             "num_inference_steps": args.num_inference_steps,
@@ -270,10 +276,19 @@ def main():
 
     # ---- 3. ProtiCelli, only on records it can handle ----
     if to_predict:
-        images = [
-            check.assemble_channels([rec["microtubules_image"], rec["nucleus_image"], rec["er_image"]])
-            for rec, _, _ in to_predict
-        ]
+        # Read the PNGs and normalize with ProtiCelli's ImageNormalizer,
+        # keeping each image's nucleus maximum to reconstruct the output.
+        images, scales = [], []
+        for rec, _, row in to_predict:
+            raw = isc.load_reference_channels(rec["microtubules_image"], rec["nucleus_image"], rec["er_image"])
+            reference, gains, nucleus_max = isc.normalize_reference(raw)
+            images.append(reference)
+            scales.append(nucleus_max)
+            row["nucleus_max"] = nucleus_max
+            row["gain_microtubules"], row["gain_nucleus"], row["gain_er"] = (
+                round(float(gains[c]), 4) for c in isc.REFERENCE_CHANNELS
+            )
+
         model = Model(**checkpoint_paths)
         output = model.predict(
             images=images,
@@ -286,9 +301,12 @@ def main():
         if len(output.images) != len(to_predict):
             raise RuntimeError(f"Output count mismatch: expected {len(to_predict)}, got {len(output.images)}")
 
-        for (rec, _, row), img in zip(to_predict, output.images):
-            save_path = output_dir / f"{rec['prediction_id']}.tiff"
-            imsave(save_path, img)
+        for (rec, _, row), pred, nucleus_max in zip(to_predict, output.images, scales):
+            out = isc.reconstruct_prediction(pred, nucleus_max)
+            save_path = output_dir / f"{rec['prediction_id']}.png"
+            isc.write_png(save_path, out)
+            row["prediction_max"] = round(float(pred.max()), 4)
+            row["output_max"] = int(out.max())
             row["output_file"] = save_path.name
             print(f"Saved: {save_path}")
     else:

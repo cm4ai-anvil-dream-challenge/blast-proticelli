@@ -46,7 +46,7 @@ human_gene_map/
 reference_data/
 *.zip
 # Split test reference images: the only example inputs, tracked for testing
-!test_image_reference_input/*.tiff
+!test_image_reference_input/*.png
 
 # Personal testing notebook
 tl_sandbox.ipynb

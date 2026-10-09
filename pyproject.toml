@@ -24,4 +24,4 @@ dependencies = [
 
 [tool.setuptools]
 # Top-level scripts, installed as plain modules (no package directory).
-py-modules = ["run_inference", "protein_predictor", "pipeline_checks"]
+py-modules = ["run_inference", "protein_predictor", "image_scaling", "pipeline_checks"]

@@ -12,7 +12,8 @@ alongside it.
 Reference images are the challenge's single-channel 8-bit PNGs (512 x 512,
 0 to 255). image_scaling.py normalizes them with ProtiCelli's own
 ImageNormalizer and maps each prediction back to 0 to 255 (see its
-docstring). FASTA files must hold a single record. The header never feeds the
+docstring). FASTA files should hold a single record; if there are several, the first is
+used and the count is reported. The header never feeds the
 prediction; its fields are copied into the results table for our own checks.
 Malformed inputs fail loudly rather than being validated and filtered here.
 
@@ -229,7 +230,11 @@ HEADER_FIELDS = {
 def header_columns(fasta_path):
     header = pp.read_fasta_header(fasta_path)
     fields = pp.parse_header_fields(header)
-    return {"fasta_header": header, **{col: fields.get(key, "") for col, key in HEADER_FIELDS.items()}}
+    return {
+        "fasta_record_count": pp.count_fasta_records(fasta_path),
+        "fasta_header": header,
+        **{col: fields.get(key, "") for col, key in HEADER_FIELDS.items()},
+    }
 
 
 def write_results(rows, path):

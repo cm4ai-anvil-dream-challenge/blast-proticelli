@@ -522,16 +522,23 @@ def local_gene_lookup(accession: str) -> dict:
 
 # ---- FASTA parsing ---------------------------------------------------------
 
+def count_fasta_records(path) -> int:
+    """Number of ">" records in a FASTA file (0 for a bare sequence)."""
+    return sum(1 for line in Path(path).read_text().splitlines() if line.startswith(">"))
+
+
 def read_fasta(path) -> str:
     """
-    Parse a single-record FASTA/.faa file into a raw sequence string.
-    Header content is never used for anything, just skipped, so it can be
-    stripped down to whatever (or nothing) upstream without affecting this.
+    Parse a FASTA/.faa file into a raw sequence string, using the first
+    record only. Header content is never used for anything, just skipped,
+    so it can be stripped down to whatever (or nothing) upstream without
+    affecting this.
 
-    Raises if a ">"-delimited file has zero or more than one record: a
-    per-image file with multiple records means something unexpected
-    happened upstream, and silently taking the first would hide that
-    rather than surface it.
+    Files with more than one record use the first, with a warning. Some
+    sample-set FASTAs list several Ensembl proteins for one antibody; the
+    challenge FASTAs are to hold one record each (decision 2026-10-09).
+    run_inference.py reports the record count per input
+    (fasta_record_count). Raises if a ">"-delimited file has no records.
     """
     path = Path(path)
     text = path.read_text()
@@ -545,7 +552,7 @@ def read_fasta(path) -> str:
     if len(records) == 0:
         raise ValueError(f"{path} has no FASTA records")
     if len(records) > 1:
-        raise ValueError(f"{path} has {len(records)} FASTA records, expected exactly 1")
+        print(f"  [warn] {path} has {len(records)} FASTA records; using the first", file=sys.stderr)
 
     lines = records[0].splitlines()
     seq = "".join(line.strip() for line in lines[1:])  # skip header line, whatever it contains
@@ -554,7 +561,8 @@ def read_fasta(path) -> str:
 
 def read_fasta_header(path) -> str:
     """
-    The FASTA header line without its ">", or "" if there is none.
+    The first FASTA header line without its ">", or "" if there is none
+    (the header of the record read_fasta uses).
 
     Reporting only: run_inference.py copies it into the results table for
     our own checks. It never feeds the protein prediction, which uses the

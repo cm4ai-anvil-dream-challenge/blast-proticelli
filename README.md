@@ -48,7 +48,7 @@ This repository holds only the baseline wrapper. ProtiCelli itself, developed by
 
 ### Records
 
-Each prediction is one record: three single-channel reference images plus one FASTA file holding a single amino acid sequence.
+Each prediction is one record: three single-channel reference images plus one FASTA file holding a single amino acid sequence. If a FASTA file holds several sequences, the first is used with a warning, and `fasta_record_count` in the results shows how many there were. (Six files in the 2026-10 sample set list several Ensembl proteins for one antibody; challenge FASTAs are to hold one each.)
 
 ```json
 [
@@ -221,7 +221,8 @@ If every record returns `predictor_error`, the run fails, since that points to a
 | `search_database` | BLAST database path used |
 | `predictor_pipeline_version` | Protein predictor version |
 | `predictor_error` | Error message, if any |
-| `fasta_header`, `fasta_hpa_antibody_id`, `fasta_ensembl_protein_id`, `fasta_ensembl_release` | From the FASTA header, reporting only |
+| `fasta_record_count` | Sequences in the FASTA file; only the first is used |
+| `fasta_header`, `fasta_hpa_antibody_id`, `fasta_ensembl_protein_id`, `fasta_ensembl_release` | From the first FASTA header, reporting only |
 | `nucleus_max` | Nucleus maximum in counts, the output scale (predicted records only) |
 | `gain_microtubules`, `gain_nucleus`, `gain_er` | `ImageNormalizer` gain per reference channel |
 | `prediction_max` | Brightest decoded prediction value (0 to 1.3) |

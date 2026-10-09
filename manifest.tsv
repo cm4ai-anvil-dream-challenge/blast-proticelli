@@ -1,3 +1,0 @@
-uid	source_db	plate_well_id	cell_id	cell_line	prediction_id	microtubules_image	nucleus_image	er_image	poi_image	poi_ensembl_gene_id	aa_sequence_fasta_path
-1	tl_test	test1	cell_0		cell_0	test_image_reference_input/cell_0_microtubules.png	test_image_reference_input/cell_0_nucleus.png	test_image_reference_input/cell_0_er.png			test_fasta_reference_input/cell_0.faa
-2	tl_test	test2	cell_1		cell_1	test_image_reference_input/cell_1_microtubules.png	test_image_reference_input/cell_1_nucleus.png	test_image_reference_input/cell_1_er.png			test_fasta_reference_input/cell_1.faa

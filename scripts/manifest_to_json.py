@@ -29,6 +29,7 @@ Usage:
 import argparse
 import csv
 import json
+import os
 import posixpath
 import sys
 from pathlib import Path
@@ -47,7 +48,13 @@ PATH_KEYS = {"microtubules_image", "er_image", "nucleus_image", "fasta_file"}
 
 
 def resolve_path(value, prefix):
-    """Join a manifest path onto the prefix unless it is already absolute or a URI."""
+    """
+    Join a manifest path onto the prefix unless it is already absolute or a
+    URI. A leading ~ is expanded to the home folder first: the shell does
+    that on the command line, but Python does not for paths read from a file.
+    """
+    if value.startswith("~"):
+        value = os.path.expanduser(value)
     if "://" in value or value.startswith("/"):
         return value
     if prefix is None:

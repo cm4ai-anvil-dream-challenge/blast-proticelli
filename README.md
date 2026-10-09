@@ -12,10 +12,14 @@ ProtiCelli uses a learned embedding for each protein it was trained on, so it ca
 ```mermaid
 flowchart TD
     A["Load input records<br/>(JSON from manifest_to_json.py)"] --> B["Extract weights file<br/>ProtiCelli weights, BLAST database, gene map"]
-    B --> C["Identify protein, per record<br/>FASTA to BLAST to UniProt to HGNC symbol"]
-    C --> D{"Any hit in ProtiCelli<br/>vocabulary?"}
-    D -- no --> E["Skip record<br/>status logged, no image"]
-    D -- yes --> N["Read reference PNGs<br/>normalize with ImageNormalizer"]
+    B --> C["BLAST the FASTA sequence, per record<br/>up to 25 hits, ranked by bit score"]
+    C --> D{"Any of these hits in<br/>ProtiCelli vocabulary?"}
+    D -- yes --> U["Use the highest-ranked hit<br/>ProtiCelli knows<br/>(best hit overall also reported)"]
+    D -- "no, 25 searched" --> W["Search again<br/>up to 500 hits"]
+    W --> D2{"Any hit in<br/>vocabulary now?"}
+    D2 -- yes --> U
+    D2 -- no --> E["Skip record<br/>status logged, no image"]
+    U --> N["Read reference PNGs<br/>normalize with ImageNormalizer"]
     N --> F["ProtiCelli prediction<br/>batched over eligible records"]
     F --> R["Rescale to 0 to 255<br/>prediction x nucleus maximum"]
     R --> G["Save {prediction_id}.png"]

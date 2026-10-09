@@ -1,0 +1,58 @@
+# Downloaded model weights (large, not checked in)
+protvs/checkpoint/
+protvs/vae/
+proticelli/checkpoint/
+proticelli/vae/
+weights/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# wdl related
+_LAST
+20[0-9][0-9]*_*/
+*_blast_proticelli/
+wdl_inputs.json
+
+# Outputs
+*.tif
+*.tiff
+*.npy
+predictions/
+predicted_manifest.tsv
+
+# Temp and reference
+predictor_cache/
+human_blast_db/
+human_gene_map/
+reference_data/
+*.zip
+# Split test reference images: the only example inputs, tracked for testing
+!test_image_reference_input/*.tiff
+
+# Personal testing notebook
+tl_sandbox.ipynb
+
+# Input validation report
+*validation_report.csv
+
+# Old version of code - backup prior to a sig update
+pipeline_checks_v1.py

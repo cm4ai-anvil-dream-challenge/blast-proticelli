@@ -1,0 +1,39 @@
+# Keep the build context to code only. Without this, "COPY ." would send
+# several GB of weights, reference data, and outputs to the Docker build.
+# Note: a pattern without **/ matches only at the repository root.
+
+.git/
+**/.DS_Store
+**/__pycache__/
+
+# Model weights, anywhere (package dir, ./weights, set-aside copies)
+**/checkpoint/
+**/vae/
+training_state_aside/
+
+# Weights zips and reference data (arrive at runtime in the weights zip)
+**/*.zip
+weights/
+reference_data/
+human_blast_db/
+human_gene_map/
+
+# Images and arrays (test inputs, outputs, and documentation figures)
+**/*.tif
+**/*.tiff
+**/*.png
+**/*.npy
+assets/
+
+# Run outputs and caches
+predictions/
+predictor_cache/
+*.csv
+_LAST
+*_predict/
+
+# Local test data and notebooks
+example_cell_reference_input/
+test_*/
+*.ipynb
+inputs.json

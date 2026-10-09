@@ -4,16 +4,16 @@ A baseline submission for the CM4AI DREAM Challenge on predicting protein subcel
 
 The pipeline has two stages:
 
-1. **Protein identification.** The amino acid sequence is searched with BLAST against a local database of reviewed human UniProt (Swiss-Prot) entries. The best-scoring hit (highest bit score, however weak) is mapped from its UniProt accession to an Ensembl gene ID and HGNC symbol with a local gene map. No network access is used at runtime.
+1. **Protein identification.** The amino acid sequence is searched with BLAST against a local database of reviewed human UniProt (Swiss-Prot) entries. Hits are ranked by bit score, and the highest-ranked hit whose gene ProtiCelli knows is used, however weak; it is mapped from its UniProt accession to an Ensembl gene ID and HGNC symbol with a local gene map. No network access is used at runtime.
 2. **Image prediction.** The three reference PNGs are normalized with ProtiCelli's own `ImageNormalizer`, then passed with the HGNC symbol to [ProtiCelli](https://github.com/CellProfiling/ProtiCelli), which generates the predicted image. The prediction is mapped back to 0 to 255 and saved as an 8-bit PNG.
 
-ProtiCelli uses a learned embedding for each protein it was trained on, so it can only predict proteins in its vocabulary (12,809 entries in `proticelli/data/antibody_map.pkl` in the installed package). Records whose protein falls outside that vocabulary are skipped and reported, not failed.
+ProtiCelli uses a learned embedding for each protein it was trained on, so it can only predict proteins in its vocabulary (12,809 entries in `proticelli/data/antibody_map.pkl` in the installed package). The protein search therefore takes the closest match ProtiCelli can predict, and reports the closest match overall alongside it for our own checks. Records with no usable hit are skipped and reported, not failed.
 
 ```mermaid
 flowchart TD
     A["Load input records<br/>(JSON from manifest_to_json.py)"] --> B["Extract weights file<br/>ProtiCelli weights, BLAST database, gene map"]
     B --> C["Identify protein, per record<br/>FASTA to BLAST to UniProt to HGNC symbol"]
-    C --> D{"Symbol in ProtiCelli<br/>vocabulary?"}
+    C --> D{"Any hit in ProtiCelli<br/>vocabulary?"}
     D -- no --> E["Skip record<br/>status logged, no image"]
     D -- yes --> N["Read reference PNGs<br/>normalize with ImageNormalizer"]
     N --> F["ProtiCelli prediction<br/>batched over eligible records"]
@@ -64,7 +64,7 @@ Each prediction is one record: three single-channel reference images plus one FA
 
 `prediction_id` must be unique within a run; it becomes the output filename. The same reference images may appear in several records paired with different FASTA files.
 
-Reference images must be single-channel 8-bit PNGs, 512 x 512, as in the challenge specification; anything else stops the run with an error. Each image set is normalized with ProtiCelli's `ImageNormalizer` (see [Output intensity](#output-intensity)). No resampling happens in this pipeline. The FASTA header is never read: it names the target, and the baseline identifies the protein from the sequence alone.
+Reference images must be single-channel 8-bit PNGs, 512 x 512, as in the challenge specification; anything else stops the run with an error. Each image set is normalized with ProtiCelli's `ImageNormalizer` (see [Output intensity](#output-intensity)). No resampling happens in this pipeline. The FASTA header never feeds the prediction: the baseline identifies the protein from the sequence alone. Its `key=value` fields (`hpa_antibody_id`, `ensembl_protein_id`, `ensembl`) are copied into the results table for our own checks, and are left blank when absent.
 
 To generate the JSON from a manifest TSV (which must include a `prediction_id` column):
 
@@ -197,8 +197,7 @@ This inversion is exact for proteins at least 30% as bright as the nucleus. Dimm
 |---|---|
 | `predicted` | Image generated |
 | `no_blast_hit` | BLAST ran but returned no hit |
-| `no_hgnc_symbol` | A UniProt hit was found, but no HGNC symbol mapped to it |
-| `not_in_model_vocabulary` | The protein was identified, but ProtiCelli was not trained on it |
+| `not_in_model_vocabulary` | BLAST found hits, but none whose gene ProtiCelli was trained on, even after the wider search |
 | `predictor_error` | BLAST or gene mapping raised an error (details in `predictor_error`) |
 
 If every record returns `predictor_error`, the run fails, since that points to a broken environment (for example a missing `blastp` binary or a malformed reference zip) rather than to the data.
@@ -210,15 +209,19 @@ If every record returns `predictor_error`, the run fails, since that points to a
 | `prediction_id` | From the input record |
 | `status` | See above |
 | `output_file` | Image filename, empty if not predicted |
-| `predicted_uniprot_accession` | Best BLAST hit (highest bit score) |
-| `predicted_ensembl_gene_id` | Mapped Ensembl gene ID |
-| `predicted_hgnc_symbol` | Mapped HGNC symbol, passed to ProtiCelli |
-| `percent_identity`, `e_value`, `alignment_length`, `bit_score` | Best hit statistics |
+| `predicted_uniprot_accession`, `predicted_ensembl_gene_id`, `predicted_hgnc_symbol` | The hit used: the highest-ranked hit in ProtiCelli's vocabulary |
+| `model_protein_key` | The vocabulary entry passed to ProtiCelli (an entry can list several symbols) |
+| `predicted_hit_rank` | Rank of the hit used among all hits (1 means the best hit overall was usable) |
+| `percent_identity`, `e_value`, `alignment_length`, `bit_score` | Statistics for the hit used |
+| `best_hit_uniprot_accession`, `best_hit_hgnc_symbol`, `best_hit_percent_identity`, `best_hit_e_value`, `best_hit_bit_score` | The best hit overall, in the vocabulary or not |
 | `blast_task` | `blastp`, or `blastp-short` for sequences under 30 residues |
+| `blast_targets_requested`, `blast_hits_returned` | 25 unless the wider search (500) was needed |
+| `blast_seconds`, `predictor_cached` | BLAST time for this sequence, and whether the result was reused from an earlier record with the same sequence |
 | `gene_candidate_count`, `mapping_ambiguous` | Whether the accession mapped to more than one Ensembl gene |
 | `search_database` | BLAST database path used |
 | `predictor_pipeline_version` | Protein predictor version |
 | `predictor_error` | Error message, if any |
+| `fasta_header`, `fasta_hpa_antibody_id`, `fasta_ensembl_protein_id`, `fasta_ensembl_release` | From the FASTA header, reporting only |
 | `nucleus_max` | Nucleus maximum in counts, the output scale (predicted records only) |
 | `gain_microtubules`, `gain_nucleus`, `gain_er` | `ImageNormalizer` gain per reference channel |
 | `prediction_max` | Brightest decoded prediction value (0 to 1.3) |
@@ -250,15 +253,17 @@ The script prints the top-level contents and the SHA-256 checksum. Record every 
 
 ## Protein search settings
 
-`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, then picks the highest bit score itself (ties broken by e-value). Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. Both values can be changed with the `BLAST_EVALUE` and `BLAST_MAX_TARGET_SEQS` environment variables.
+`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, ranks the hits by bit score itself (ties broken by e-value), and walks down the list to the first hit whose gene symbol is in ProtiCelli's vocabulary, matching names the way ProtiCelli does (an exact entry, or a symbol listed inside a combined entry). If none of the 25 qualifies, it searches once more with 500. Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. The limits can be changed with `BLAST_EVALUE`, `BLAST_MAX_TARGET_SEQS` and `BLAST_MAX_TARGET_SEQS_RETRY`.
+
+Results are cached by sequence, so a sequence that appears in many records is searched once per run.
 
 ## Open items
 
 - **Dim proteins in the output (ask the Lundberg lab).** The protein channel is empty at inference, so its true brightness relative to the nucleus is unknown, and the output assumes it is at least 30% of the nucleus. A dim protein therefore comes back too bright (see [Output intensity](#output-intensity)), which matters for intensity-sensitive metrics and for anyone viewing the images, since a dim protein shown bright reads as highly expressed. The lift is monotone, so the prediction's own brightness could be used to solve back for the true ratio; the Lundberg lab's convention is undocumented.
 - **ProtiCelli release.** Pinned to an upstream commit. Ask the Lundberg lab for a release tag to pin, and record the weights checksums when locking.
 - **ProtiCelli licence.** Upstream added a GPL v3 `LICENSE` file (2026-09-09), but its `pyproject.toml` still says MIT. Confirm which applies.
-- **Vocabulary entries with several symbols.** 463 of the 12,809 vocabulary entries are comma-separated symbol lists. A BLAST result matching one symbol inside such an entry is currently reported as `not_in_model_vocabulary`, although ProtiCelli itself would resolve it.
-- **BLAST settings against the real database.** The new search settings were checked with a stand-in `blastp`; confirm on the two example records (expected: P55263, ADK, for both) and confirm whether Matthew changed the BLAST step separately.
+- **Vocabulary entries with several symbols.** 463 of the 12,809 vocabulary entries list several symbols (for example a GAGE family entry). A hit on any listed symbol uses that entry, as ProtiCelli itself does; a symbol listed in two equally specific entries is treated as not in the vocabulary.
+- **BLAST settings against the real database.** The new search settings were checked with a stand-in `blastp`; confirm on the two example records (expected: P55263, ADK, for both), and measure `blast_seconds` on real sequences and confirm whether Matthew changed the BLAST step separately.
 - **EMA weights.** ProtiCelli's `Model.model` loads `checkpoint/unet` (`_load_model()` defaults to `use_ema=False`), while its fine-tuning path loads `checkpoint/unet_ema`. EMA weights are commonly the ones used for sampling in diffusion models, so whether inference should use them is a question for the Lundberg lab. Both folders stay in the weights file until then; dropping the unused one would save a further 1.7 GB.
 - **Reproducibility on Apple GPUs.** With a fixed seed, repeated runs on MPS differ by up to about 0.05% of the output range. Whether CUDA runs on Terra are bit-identical is untested.
 - **Handling of skipped records.** Skipping out-of-vocabulary proteins and failing only on all-error runs are provisional choices; how skipped records are scored is a challenge design question.

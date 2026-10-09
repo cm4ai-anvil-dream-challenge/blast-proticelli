@@ -5,13 +5,15 @@ BLAST + ProtiCelli baseline inference.
 Reads the limited JSON produced by manifest_to_json.py (one record per
 prediction), identifies each record's protein from its FASTA file with
 protein_predictor.py (local BLAST + local gene map only, no network), and
-runs ProtiCelli on every record whose predicted HGNC symbol is in the
-model's vocabulary.
+runs ProtiCelli on every record. The protein used is the best-scoring BLAST
+hit that is in ProtiCelli's vocabulary; the best hit overall is reported
+alongside it.
 
 Reference images are the challenge's single-channel 8-bit PNGs (512 x 512,
 0 to 255). image_scaling.py normalizes them with ProtiCelli's own
 ImageNormalizer and maps each prediction back to 0 to 255 (see its
-docstring). FASTA files must hold a single record; the header is ignored.
+docstring). FASTA files must hold a single record. The header never feeds the
+prediction; its fields are copied into the results table for our own checks.
 Malformed inputs fail loudly rather than being validated and filtered here.
 
 Everything the model needs at runtime ships in one weights zip
@@ -46,8 +48,7 @@ from proticelli import Model
 STATUS_PREDICTED = "predicted"
 STATUS_PREDICTOR_ERROR = "predictor_error"          # BLAST or mapping raised
 STATUS_NO_HIT = "no_blast_hit"                      # BLAST ran, returned nothing
-STATUS_NO_SYMBOL = "no_hgnc_symbol"                 # hit found, no HGNC symbol mapped
-STATUS_NOT_IN_VOCAB = "not_in_model_vocabulary"     # symbol unknown to ProtiCelli
+STATUS_NOT_IN_VOCAB = "not_in_model_vocabulary"     # hits found, none ProtiCelli knows
 
 # The checkpoint subfolder ProtiCelli loads for inference (see load_weights).
 INFERENCE_WEIGHTS_SUBDIR = "unet"
@@ -58,14 +59,27 @@ GENE_MAP_MEMBER = "reference/human_gene_map.zip"
 
 # Columns carried from protein_predictor's result dict into the results TSV.
 PREDICTOR_FIELDS = [
+    # The hit used: best-scoring hit in ProtiCelli's vocabulary.
     "predicted_uniprot_accession",
     "predicted_ensembl_gene_id",
     "predicted_hgnc_symbol",
+    "model_protein_key",
+    "predicted_hit_rank",
     "percent_identity",
     "e_value",
     "alignment_length",
     "bit_score",
+    # The best-scoring hit overall, in the vocabulary or not.
+    "best_hit_uniprot_accession",
+    "best_hit_hgnc_symbol",
+    "best_hit_percent_identity",
+    "best_hit_e_value",
+    "best_hit_bit_score",
     "blast_task",
+    "blast_targets_requested",
+    "blast_hits_returned",
+    "blast_seconds",
+    "predictor_cached",
     "gene_candidate_count",
     "mapping_ambiguous",
     "search_database",
@@ -193,18 +207,29 @@ def find_antibody_map(explicit_path=None):
     return path
 
 
-def classify(prediction, vocabulary):
+def classify(prediction):
     """Map a protein_predictor result to one of the STATUS_* values."""
     if prediction.get("error"):
         return STATUS_PREDICTOR_ERROR
-    if not prediction.get("predicted_uniprot_accession"):
+    if not prediction.get("best_hit_uniprot_accession"):
         return STATUS_NO_HIT
-    symbol = prediction.get("predicted_hgnc_symbol")
-    if not symbol:
-        return STATUS_NO_SYMBOL
-    if symbol not in vocabulary:
+    if not prediction.get("model_protein_key"):
         return STATUS_NOT_IN_VOCAB
     return STATUS_PREDICTED
+
+
+# FASTA header fields copied into the results table (reporting only).
+HEADER_FIELDS = {
+    "fasta_hpa_antibody_id": "hpa_antibody_id",
+    "fasta_ensembl_protein_id": "ensembl_protein_id",
+    "fasta_ensembl_release": "ensembl",
+}
+
+
+def header_columns(fasta_path):
+    header = pp.read_fasta_header(fasta_path)
+    fields = pp.parse_header_fields(header)
+    return {"fasta_header": header, **{col: fields.get(key, "") for col, key in HEADER_FIELDS.items()}}
 
 
 def write_results(rows, path):
@@ -233,18 +258,18 @@ def main():
     configure_protein_predictor(blast_db_zip, gene_map_zip, args.reference_data_dir)
     antibody_map_path = find_antibody_map(args.antibody_map)
     with open(antibody_map_path, "rb") as f:
-        vocabulary = pickle.load(f)
-    print(f"Model vocabulary: {len(vocabulary)} symbols from {antibody_map_path}")
+        vocabulary = pp.Vocabulary(pickle.load(f).keys())
+    print(f"Model vocabulary: {len(vocabulary.keys)} entries from {antibody_map_path}")
 
     # ---- 2. Protein identification, one record at a time ----
     results_rows = []
-    to_predict = []  # (record, hgnc_symbol, results_row)
+    to_predict = []  # (record, model_protein_key, results_row)
     for i, rec in enumerate(records, 1):
         seq = pp.read_fasta(rec["fasta_file"])
-        prediction = pp.predict_for_sequence(seq)
-        status = classify(prediction, vocabulary)
-        print(f"[{i}/{len(records)}] {rec['prediction_id']}: "
-              f"{prediction.get('predicted_hgnc_symbol')} -> {status}")
+        prediction = pp.predict_for_sequence(seq, vocabulary=vocabulary)
+        status = classify(prediction)
+        print(f"[{i}/{len(records)}] {rec['prediction_id']}: best {prediction.get('best_hit_hgnc_symbol')}, "
+              f"used {prediction.get('model_protein_key')} (rank {prediction.get('predicted_hit_rank')}) -> {status}")
 
         row = {
             "prediction_id": rec["prediction_id"],
@@ -252,6 +277,7 @@ def main():
             "output_file": "",
             **{k: prediction.get(k) for k in PREDICTOR_FIELDS},
             "predictor_error": prediction.get("error", ""),
+            **header_columns(rec["fasta_file"]),
             # Filled in for predicted records (see step 3).
             "nucleus_max": "",
             "gain_microtubules": "",
@@ -266,7 +292,7 @@ def main():
         }
         results_rows.append(row)
         if status == STATUS_PREDICTED:
-            to_predict.append((rec, prediction["predicted_hgnc_symbol"], row))
+            to_predict.append((rec, prediction["model_protein_key"], row))
 
     results_path = output_dir / "prediction_results.tsv"
 
@@ -294,7 +320,7 @@ def main():
         model = Model(**checkpoint_paths)
         output = model.predict(
             images=images,
-            protein_names=[symbol for _, symbol, _ in to_predict],
+            protein_names=[key for _, key, _ in to_predict],
             cell_line_names=[args.cell_line] * len(to_predict) if args.cell_line else None,
             num_inference_steps=args.num_inference_steps,
             batch_size=args.batch_size,

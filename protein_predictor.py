@@ -15,9 +15,12 @@ run_inference.py always forces both to "local" and points them at the
 reference zips inside the weights file, so a pipeline run needs no
 network access. The EBI and MyGene.info backends remain for development.
 
-The local search always reports the best-scoring hit (highest bit score),
-however weak: the baseline is meant as a "worst case" protein step. See
-local_blast_search for the settings. The FASTA header is never read.
+The local search ranks hits by bit score. Given ProtiCelli's vocabulary
+(as run_inference.py does), it uses the highest-ranked hit ProtiCelli can
+predict, however weak, and also reports the best hit overall: the baseline
+is meant as a "worst case" protein step. See _local_search_in_vocabulary.
+The FASTA header never feeds the prediction (read_fasta skips it;
+read_fasta_header exists only for reporting).
 
 Results are cached on disk keyed by sequence plus search and mapping
 settings. Standalone use, over a manifest with an aa_sequence_fasta_path
@@ -71,6 +74,11 @@ MAKEBLASTDB_BIN = os.environ.get("MAKEBLASTDB_BIN", "makeblastdb")
 # hits are then ranked here by bitscore.
 BLAST_EVALUE = os.environ.get("BLAST_EVALUE", "1000")
 BLAST_MAX_TARGET_SEQS = os.environ.get("BLAST_MAX_TARGET_SEQS", "25")
+# When a model vocabulary is given (run_inference.py), the hit used is the
+# best-scoring one whose gene symbol ProtiCelli knows. If none of the first
+# BLAST_MAX_TARGET_SEQS hits qualifies, the search is repeated once with
+# this larger limit.
+BLAST_MAX_TARGET_SEQS_RETRY = os.environ.get("BLAST_MAX_TARGET_SEQS_RETRY", "500")
 # Queries shorter than this use -task blastp-short, which BLAST+ tunes for
 # short peptides (smaller word size, PAM30).
 BLASTP_SHORT_MAX_LEN = 30
@@ -155,11 +163,11 @@ CACHE_DIR = Path("./predictor_cache")
 POLL_INTERVAL_SEC = 5
 POLL_TIMEOUT_SEC = 300  # ceiling per sequence; blastp vs uniprotkb is usually much faster
 
-PIPELINE_VERSION = "protein_predictor_v0.2_local"
+PIPELINE_VERSION = "protein_predictor_v0.3_local"
 
 # ---- Small helpers --------------------------------------------------------
 
-def sequence_key(seq: str) -> str:
+def sequence_key(seq: str, extra: str = "") -> str:
     """
     Short, filesystem safe internal cache key. Never written to the manifest.
 
@@ -172,30 +180,31 @@ def sequence_key(seq: str) -> str:
     orphaned, harmless dead files.
     """
     if SEARCH_BACKEND == "local":
-        search_tag = f"local|{LOCAL_BLAST_DB}|{BLAST_EVALUE}|{BLAST_MAX_TARGET_SEQS}|{PIPELINE_VERSION}"
+        search_tag = (f"local|{LOCAL_BLAST_DB}|{BLAST_EVALUE}|{BLAST_MAX_TARGET_SEQS}|"
+                      f"{BLAST_MAX_TARGET_SEQS_RETRY}|{PIPELINE_VERSION}")
     else:
         search_tag = f"ebi|{EBI_DATABASE}|{ORGANISM_FILTER}"
 
     mapping_tag = f"local|{LOCAL_GENE_MAP}" if MAPPING_BACKEND == "local" else "mygene"
 
-    payload = f"{seq.strip().upper()}|{search_tag}|{mapping_tag}"
+    payload = f"{seq.strip().upper()}|{search_tag}|{mapping_tag}|{extra}"
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def cache_path(seq: str) -> Path:
+def cache_path(seq: str, extra: str = "") -> Path:
     CACHE_DIR.mkdir(exist_ok=True)
-    return CACHE_DIR / f"{sequence_key(seq)}.json"
+    return CACHE_DIR / f"{sequence_key(seq, extra)}.json"
 
 
-def load_cached(seq: str):
-    p = cache_path(seq)
+def load_cached(seq: str, extra: str = ""):
+    p = cache_path(seq, extra)
     if p.exists():
         return json.loads(p.read_text())
     return None
 
 
-def save_cache(seq: str, result: dict):
-    cache_path(seq).write_text(json.dumps(result, indent=2))
+def save_cache(seq: str, result: dict, extra: str = ""):
+    cache_path(seq, extra).write_text(json.dumps(result, indent=2))
 
 
 # ---- Step 1: EBI BLAST, sequence to UniProt accession --------------------
@@ -322,32 +331,24 @@ def build_local_db(fasta_path: str, db_prefix: str):
     )
 
 
-def local_blast_search(seq: str, db_prefix: str) -> dict:
-    """
-    Run blastp locally against a database built with build_local_db, and
-    return the highest-scoring hit in the same shape parse_top_hit returns
-    for the EBI backend, plus its bit score and the BLAST task used.
+def blast_task_for(seq: str) -> str:
+    """-task blastp-short for short peptides, blastp otherwise."""
+    return "blastp-short" if len(seq) < BLASTP_SHORT_MAX_LEN else "blastp"
 
-    Up to BLAST_MAX_TARGET_SEQS hits are requested and ranked here by bit
-    score (ties broken by e-value), rather than trusting -max_target_seqs 1
-    to return the best one. Sequences shorter than BLASTP_SHORT_MAX_LEN use
-    -task blastp-short. No organism filter is applied: the database is
-    built from a human-only FASTA, so every hit is human by construction.
+
+def local_blast_hits(seq: str, db_prefix: str, max_target_seqs) -> list:
+    """
+    Run blastp locally against a database built with build_local_db and
+    return every subject hit, best first: ranked by bit score, ties broken
+    by e-value. Each subject appears once (its best-scoring HSP).
+
+    max_target_seqs is more than 1 on purpose: with 1, BLAST can return the
+    first good hit rather than the best (Shah et al. 2019). No organism
+    filter: the database is human-only by construction.
 
     Raises CalledProcessError if blastp itself fails (e.g. bad db path);
-    a clean "no hit found" is a successful run with empty stdout, not an
-    exception, same distinction the EBI path makes.
+    "no hit" is a successful run with empty output and returns [].
     """
-    task = "blastp-short" if len(seq) < BLASTP_SHORT_MAX_LEN else "blastp"
-    empty = {
-        "uniprot_accession": None,
-        "percent_identity": None,
-        "e_value": None,
-        "alignment_length": None,
-        "bit_score": None,
-        "blast_task": task,
-    }
-
     with tempfile.NamedTemporaryFile(mode="w", suffix=".faa", delete=False) as f:
         f.write(f">query\n{seq}\n")
         query_path = f.name
@@ -356,38 +357,87 @@ def local_blast_search(seq: str, db_prefix: str) -> dict:
         proc = subprocess.run(
             [
                 BLASTP_BIN,
-                "-task", task,
+                "-task", blast_task_for(seq),
                 "-query", query_path,
                 "-db", db_prefix,
                 "-outfmt", "6",
                 "-evalue", BLAST_EVALUE,
-                "-max_target_seqs", BLAST_MAX_TARGET_SEQS,
+                "-max_target_seqs", str(max_target_seqs),
             ],
-            capture_output=True, text=True, timeout=60, check=True,
+            capture_output=True, text=True, timeout=120, check=True,
         )
     finally:
         os.unlink(query_path)
 
     # outfmt 6 default columns: qseqid sseqid pident length mismatch gapopen
-    # qstart qend sstart send evalue bitscore. One line per HSP, so a
-    # subject can appear more than once; ranking every line still picks the
-    # best-scoring subject.
+    # qstart qend sstart send evalue bitscore. One line per HSP.
     rows = [line.split("\t") for line in proc.stdout.splitlines() if line.strip()]
-    if not rows:
-        return empty
-    best = max(rows, key=lambda r: (float(r[11]), -float(r[10])))
+    rows.sort(key=lambda r: (-float(r[11]), float(r[10])))
 
-    sseqid, pident, length, evalue, bitscore = best[1], best[2], best[3], best[10], best[11]
-    accession = sseqid.split("|")[1] if "|" in sseqid else sseqid
+    hits, seen = [], set()
+    for r in rows:
+        sseqid = r[1]
+        accession = sseqid.split("|")[1] if "|" in sseqid else sseqid
+        if accession in seen:
+            continue
+        seen.add(accession)
+        hits.append({
+            "uniprot_accession": accession,
+            "percent_identity": round(float(r[2]), 1),
+            "e_value": r[10],
+            "alignment_length": int(r[3]),
+            "bit_score": float(r[11]),
+        })
+    return hits
 
-    return {
-        "uniprot_accession": accession,
-        "percent_identity": round(float(pident), 1),
-        "e_value": evalue,
-        "alignment_length": int(length),
-        "bit_score": float(bitscore),
-        "blast_task": task,
+
+def local_blast_search(seq: str, db_prefix: str) -> dict:
+    """
+    Best local hit only, in the shape parse_top_hit returns for the EBI
+    backend (plus bit_score and blast_task). Used when no model vocabulary
+    is given.
+    """
+    hits = local_blast_hits(seq, db_prefix, BLAST_MAX_TARGET_SEQS)
+    best = hits[0] if hits else {
+        "uniprot_accession": None, "percent_identity": None,
+        "e_value": None, "alignment_length": None, "bit_score": None,
     }
+    return {**best, "blast_task": blast_task_for(seq)}
+
+
+# ---- Model vocabulary --------------------------------------------------------
+
+class Vocabulary:
+    """
+    ProtiCelli's protein vocabulary (the keys of antibody_map.pkl), with
+    the same name matching ProtiCelli's Model._resolve_protein_name uses:
+    an exact key first, otherwise a key that lists the symbol among its
+    comma-separated entries (fewest entries wins). A symbol matching
+    several equally specific keys is treated as not resolvable here,
+    where ProtiCelli would raise.
+    """
+
+    def __init__(self, keys):
+        self.keys = set(keys)
+        self._by_token = {}
+        for key in self.keys:
+            for token in (t.strip() for t in key.split(",")):
+                if token:
+                    self._by_token.setdefault(token, []).append(key)
+        self.digest = hashlib.sha256("\n".join(sorted(self.keys)).encode()).hexdigest()[:12]
+
+    def resolve(self, symbol):
+        """Return the vocabulary key for symbol, or None."""
+        if not symbol:
+            return None
+        if symbol in self.keys:
+            return symbol
+        matches = self._by_token.get(symbol, [])
+        if not matches:
+            return None
+        fewest = min(len(k.split(",")) for k in matches)
+        best = [k for k in matches if len(k.split(",")) == fewest]
+        return best[0] if len(best) == 1 else None
 
 
 # ---- Step 2: MyGene.info, UniProt accession to Ensembl gene ID -----------
@@ -502,25 +552,57 @@ def read_fasta(path) -> str:
     return seq.upper()
 
 
+def read_fasta_header(path) -> str:
+    """
+    The FASTA header line without its ">", or "" if there is none.
+
+    Reporting only: run_inference.py copies it into the results table for
+    our own checks. It never feeds the protein prediction, which uses the
+    sequence alone (read_fasta).
+    """
+    for line in Path(path).read_text().splitlines():
+        if line.startswith(">"):
+            return line[1:].strip()
+    return ""
+
+
+def parse_header_fields(header: str) -> dict:
+    """Split a header like "a=1|b=2" into {"a": "1", "b": "2"}; other parts are ignored."""
+    fields = {}
+    for part in header.split("|"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            fields[k.strip()] = v.strip()
+    return fields
+
+
 # ---- Orchestration ---------------------------------------------------------
 
-def predict_for_sequence(seq: str, force_rerun: bool = False) -> dict:
-    if not force_rerun:
-        cached = load_cached(seq)
-        if cached is not None:
-            return cached
-
-    result = {
+def _empty_result() -> dict:
+    return {
+        # The hit used: the best-scoring hit ProtiCelli can predict when a
+        # vocabulary is given, otherwise simply the best-scoring hit.
         "predicted_uniprot_accession": None,
         "predicted_ensembl_gene_id": None,
         "predicted_hgnc_symbol": None,
-        "search_tool": "local_blastp" if SEARCH_BACKEND == "local" else "ebi_blastp",
-        "search_database": LOCAL_BLAST_DB if SEARCH_BACKEND == "local" else EBI_DATABASE,
+        "model_protein_key": None,
+        "predicted_hit_rank": None,
         "percent_identity": None,
         "e_value": None,
         "alignment_length": None,
         "bit_score": None,
+        # The best-scoring hit overall, whether or not ProtiCelli knows it.
+        "best_hit_uniprot_accession": None,
+        "best_hit_hgnc_symbol": None,
+        "best_hit_percent_identity": None,
+        "best_hit_e_value": None,
+        "best_hit_bit_score": None,
         "blast_task": None,
+        "blast_targets_requested": None,
+        "blast_hits_returned": None,
+        "blast_seconds": None,
+        "search_tool": "local_blastp" if SEARCH_BACKEND == "local" else "ebi_blastp",
+        "search_database": LOCAL_BLAST_DB if SEARCH_BACKEND == "local" else EBI_DATABASE,
         "mapping_tool": "local_uniprot_ensembl_map" if MAPPING_BACKEND == "local" else "mygene.info",
         "gene_candidate_count": 0,
         "mapping_ambiguous": False,
@@ -528,14 +610,94 @@ def predict_for_sequence(seq: str, force_rerun: bool = False) -> dict:
         "predictor_run_timestamp": pd.Timestamp.now("UTC").isoformat(),
     }
 
+
+def _map_accession(accession: str) -> dict:
+    if MAPPING_BACKEND == "local":
+        if not LOCAL_GENE_MAP:
+            raise ValueError("MAPPING_BACKEND=local requires LOCAL_GENE_MAP to be set")
+        return local_gene_lookup(accession)
+    return map_to_ensembl_gene(accession)
+
+
+def _set_used_hit(result: dict, hit: dict, mapping: dict, rank, model_key=None):
+    result["predicted_uniprot_accession"] = hit["uniprot_accession"]
+    result["predicted_ensembl_gene_id"] = mapping["ensembl_gene_id"]
+    result["predicted_hgnc_symbol"] = mapping.get("hgnc_symbol")
+    result["gene_candidate_count"] = mapping["gene_candidate_count"]
+    result["mapping_ambiguous"] = mapping["mapping_ambiguous"]
+    result["model_protein_key"] = model_key
+    result["predicted_hit_rank"] = rank
+    for k in ("percent_identity", "e_value", "alignment_length", "bit_score"):
+        result[k] = hit.get(k)
+
+
+def _local_search_in_vocabulary(seq: str, vocabulary: "Vocabulary", result: dict):
+    """
+    Walk the ranked local hits and use the first whose gene symbol is in
+    the model vocabulary, searching again with BLAST_MAX_TARGET_SEQS_RETRY
+    targets only if none of the first BLAST_MAX_TARGET_SEQS qualifies.
+    """
+    result["blast_task"] = blast_task_for(seq)
+    elapsed = 0.0
+    for limit in (BLAST_MAX_TARGET_SEQS, BLAST_MAX_TARGET_SEQS_RETRY):
+        t0 = time.perf_counter()
+        hits = local_blast_hits(seq, LOCAL_BLAST_DB, limit)
+        elapsed += time.perf_counter() - t0
+        result["blast_targets_requested"] = int(limit)
+        result["blast_hits_returned"] = len(hits)
+        result["blast_seconds"] = round(elapsed, 3)
+
+        if not hits:
+            return  # no hit at all; a larger limit cannot help
+
+        best_mapping = _map_accession(hits[0]["uniprot_accession"])
+        result["best_hit_uniprot_accession"] = hits[0]["uniprot_accession"]
+        result["best_hit_hgnc_symbol"] = best_mapping.get("hgnc_symbol")
+        result["best_hit_percent_identity"] = hits[0]["percent_identity"]
+        result["best_hit_e_value"] = hits[0]["e_value"]
+        result["best_hit_bit_score"] = hits[0]["bit_score"]
+
+        for rank, hit in enumerate(hits, 1):
+            mapping = best_mapping if rank == 1 else _map_accession(hit["uniprot_accession"])
+            key = vocabulary.resolve(mapping.get("hgnc_symbol"))
+            if key:
+                _set_used_hit(result, hit, mapping, rank, key)
+                return
+
+        if len(hits) < int(limit):
+            return  # BLAST returned everything it found; a larger limit cannot help
+
+
+def predict_for_sequence(seq: str, force_rerun: bool = False, vocabulary: "Vocabulary" = None) -> dict:
+    """
+    Identify the protein for one sequence.
+
+    With a vocabulary (local search only), the hit used is the best-scoring
+    hit ProtiCelli can predict, and the best hit overall is reported
+    alongside it. Without one, the hit used is the best-scoring hit.
+    """
+    extra = vocabulary.digest if vocabulary is not None else ""
+    if not force_rerun:
+        cached = load_cached(seq, extra)
+        if cached is not None:
+            return {**cached, "predictor_cached": True}
+
+    result = _empty_result()
+
     try:
         if SEARCH_BACKEND == "local":
             if not LOCAL_BLAST_DB:
                 raise ValueError("SEARCH_BACKEND=local requires LOCAL_BLAST_DB to be set")
-            hit = local_blast_search(seq, LOCAL_BLAST_DB)
-            result["search_tool"] = "local_blastp"
-            result["search_database"] = LOCAL_BLAST_DB
+            if vocabulary is not None:
+                _local_search_in_vocabulary(seq, vocabulary, result)
+            else:
+                hit = local_blast_search(seq, LOCAL_BLAST_DB)
+                result["blast_task"] = hit["blast_task"]
+                if hit["uniprot_accession"]:
+                    _set_used_hit(result, hit, _map_accession(hit["uniprot_accession"]), 1)
         else:
+            if vocabulary is not None:
+                raise ValueError("Vocabulary-aware search needs SEARCH_BACKEND=local")
             job_id = submit_blast(seq)
             wait_for_blast(job_id)
             xml_text = fetch_blast_xml(job_id)
@@ -547,35 +709,16 @@ def predict_for_sequence(seq: str, force_rerun: bool = False) -> dict:
             (CACHE_DIR / f"{sequence_key(seq)}_raw.xml").write_text(xml_text)
 
             hit = parse_top_hit(xml_text, organism_filter=ORGANISM_FILTER)
-
-        result["predicted_uniprot_accession"] = hit["uniprot_accession"]
-        result["percent_identity"] = hit["percent_identity"]
-        result["e_value"] = hit["e_value"]
-        result["alignment_length"] = hit["alignment_length"]
-        result["bit_score"] = hit.get("bit_score")
-        result["blast_task"] = hit.get("blast_task")
-
-        if hit["uniprot_accession"]:
-            if MAPPING_BACKEND == "local":
-                if not LOCAL_GENE_MAP:
-                    raise ValueError("MAPPING_BACKEND=local requires LOCAL_GENE_MAP to be set")
-                mapping = local_gene_lookup(hit["uniprot_accession"])
-                result["mapping_tool"] = "local_uniprot_ensembl_map"
-            else:
-                mapping = map_to_ensembl_gene(hit["uniprot_accession"])
-                result["mapping_tool"] = "mygene.info"
-            result["predicted_ensembl_gene_id"] = mapping["ensembl_gene_id"]
-            result["predicted_hgnc_symbol"] = mapping.get("hgnc_symbol")
-            result["gene_candidate_count"] = mapping["gene_candidate_count"]
-            result["mapping_ambiguous"] = mapping["mapping_ambiguous"]
+            if hit["uniprot_accession"]:
+                _set_used_hit(result, hit, _map_accession(hit["uniprot_accession"]), 1)
 
     except Exception as exc:
         result["error"] = str(exc)
-        print(f"  [warn] prediction failed for sequence hash {sequence_key(seq)}: {exc}", file=sys.stderr)
+        print(f"  [warn] prediction failed for sequence hash {sequence_key(seq, extra)}: {exc}", file=sys.stderr)
         return result  # do NOT cache failures, so a rerun retries instead of replaying the same failure
 
-    save_cache(seq, result)
-    return result
+    save_cache(seq, result, extra)
+    return {**result, "predictor_cached": False}
 
 
 def run(manifest_path: str, output_path: str, fasta_dir: str = ".", force_rerun: bool = False):

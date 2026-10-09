@@ -5,9 +5,10 @@ BLAST + ProtiCelli baseline inference.
 Reads the limited JSON produced by manifest_to_json.py (one record per
 prediction), identifies each record's protein from its FASTA file with
 protein_predictor.py (local BLAST + local gene map only, no network), and
-runs ProtiCelli on every record. The protein used is the best-scoring BLAST
-hit that is in ProtiCelli's vocabulary; the best hit overall is reported
-alongside it.
+runs ProtiCelli on every record: no record is skipped. The protein used is
+the best-scoring BLAST hit that is in ProtiCelli's vocabulary, however weak;
+the best hit overall is reported alongside it. If no hit is usable, the
+fallback protein (--fallback_protein) is used and the status says why.
 
 Reference images are the challenge's single-channel 8-bit PNGs (512 x 512,
 0 to 255). image_scaling.py normalizes them with ProtiCelli's own
@@ -47,10 +48,17 @@ import protein_predictor as pp
 from proticelli import Model
 
 # Per-record outcome, recorded in the status column of prediction_results.tsv.
-STATUS_PREDICTED = "predicted"
-STATUS_PREDICTOR_ERROR = "predictor_error"          # BLAST or mapping raised
-STATUS_NO_HIT = "no_blast_hit"                      # BLAST ran, returned nothing
-STATUS_NOT_IN_VOCAB = "not_in_model_vocabulary"     # hits found, none ProtiCelli knows
+# Every record gets a predicted image. The status says which protein was
+# used: a BLAST hit, or the fallback protein (--fallback_protein) and why.
+STATUS_PREDICTED = "predicted"                                  # best BLAST hit ProtiCelli knows
+STATUS_FALLBACK_NO_VOCAB = "fallback_no_vocabulary_hit"         # hits, none ProtiCelli knows
+STATUS_FALLBACK_NO_HIT = "fallback_no_blast_hit"                # BLAST found nothing at all
+STATUS_FALLBACK_ERROR = "fallback_predictor_error"              # BLAST or mapping raised
+FALLBACK_STATUSES = (STATUS_FALLBACK_NO_VOCAB, STATUS_FALLBACK_NO_HIT, STATUS_FALLBACK_ERROR)
+
+# Used when no BLAST hit can be: a broadly expressed cytosolic protein.
+# Arbitrary by design; the status column flags every record that used it.
+DEFAULT_FALLBACK_PROTEIN = "GAPDH"
 
 # Written into weights_dir after extraction; holds the weights fingerprint.
 WEIGHTS_MARKER = ".weights_fingerprint"
@@ -103,6 +111,9 @@ def parse_args():
     parser.add_argument("--antibody_map", default=None,
                         help="Override path to antibody_map.pkl. Default: proticelli/data/ in the installed package.")
     parser.add_argument("--reference_data_dir", default="./reference_data", help="Where the BLAST DB and gene map are extracted")
+    parser.add_argument("--fallback_protein", default=DEFAULT_FALLBACK_PROTEIN,
+                        help="ProtiCelli protein used when no BLAST hit is in the vocabulary, "
+                             "so every record still gets an image (flagged in the status column)")
     parser.add_argument("--num_inference_steps", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--seed", type=int, default=None)
@@ -245,11 +256,11 @@ def find_antibody_map(explicit_path=None):
 def classify(prediction):
     """Map a protein_predictor result to one of the STATUS_* values."""
     if prediction.get("error"):
-        return STATUS_PREDICTOR_ERROR
+        return STATUS_FALLBACK_ERROR
     if not prediction.get("best_hit_uniprot_accession"):
-        return STATUS_NO_HIT
+        return STATUS_FALLBACK_NO_HIT
     if not prediction.get("model_protein_key"):
-        return STATUS_NOT_IN_VOCAB
+        return STATUS_FALLBACK_NO_VOCAB
     return STATUS_PREDICTED
 
 
@@ -299,6 +310,9 @@ def main():
     with open(antibody_map_path, "rb") as f:
         vocabulary = pp.Vocabulary(pickle.load(f).keys())
     print(f"Model vocabulary: {len(vocabulary.keys)} entries from {antibody_map_path}")
+    fallback_key = vocabulary.resolve(args.fallback_protein)
+    if not fallback_key:
+        raise ValueError(f"--fallback_protein {args.fallback_protein!r} is not in ProtiCelli's vocabulary")
 
     # ---- 2. Protein identification, one record at a time ----
     results_rows = []
@@ -307,13 +321,17 @@ def main():
         seq = pp.read_fasta(rec["fasta_file"])
         prediction = pp.predict_for_sequence(seq, vocabulary=vocabulary)
         status = classify(prediction)
+        protein_key = fallback_key if status in FALLBACK_STATUSES else prediction["model_protein_key"]
         print(f"[{i}/{len(records)}] {rec['prediction_id']}: best {prediction.get('best_hit_hgnc_symbol')}, "
-              f"used {prediction.get('model_protein_key')} (rank {prediction.get('predicted_hit_rank')}) -> {status}")
+              f"used {protein_key} (rank {prediction.get('predicted_hit_rank')}) -> {status}")
 
         row = {
             "prediction_id": rec["prediction_id"],
             "status": status,
             "output_file": "",
+            # What ProtiCelli was actually asked to predict: the BLAST hit's
+            # vocabulary entry, or the fallback protein.
+            "protein_passed_to_model": protein_key,
             **{k: prediction.get(k) for k in PREDICTOR_FIELDS},
             "predictor_error": prediction.get("error", ""),
             **header_columns(rec["fasta_file"]),
@@ -330,18 +348,18 @@ def main():
             "run_id": run_id,
         }
         results_rows.append(row)
-        if status == STATUS_PREDICTED:
-            to_predict.append((rec, prediction["model_protein_key"], row))
+        to_predict.append((rec, protein_key, row))
 
     results_path = output_dir / "prediction_results.tsv"
 
     # Every record failing inside the predictor points at the environment
     # (missing blastp, bad reference zip), not at the data. Fail the run.
-    if all(r["status"] == STATUS_PREDICTOR_ERROR for r in results_rows):
+    # This stops the run rather than predicting every record with the fallback.
+    if all(r["status"] == STATUS_FALLBACK_ERROR for r in results_rows):
         write_results(results_rows, results_path)
         raise RuntimeError("Protein prediction failed for every record; check the BLAST DB and gene map")
 
-    # ---- 3. ProtiCelli, only on records it can handle ----
+    # ---- 3. ProtiCelli, on every record ----
     if to_predict:
         # Read the PNGs and normalize with ProtiCelli's ImageNormalizer,
         # keeping each image's nucleus maximum to reconstruct the output.
@@ -379,8 +397,6 @@ def main():
             row["output_max"] = int(out.max())
             row["output_file"] = save_path.name
             print(f"Saved: {save_path}")
-    else:
-        print("No records were in the model vocabulary; no images generated", file=sys.stderr)
 
     write_results(results_rows, results_path)
     counts = {}

@@ -7,7 +7,7 @@ The pipeline has two stages:
 1. **Protein identification.** The amino acid sequence is searched with BLAST against a local database of reviewed human UniProt (Swiss-Prot) entries. Hits are ranked by bit score, and the highest-ranked hit whose gene ProtiCelli knows is used, however weak; it is mapped from its UniProt accession to an Ensembl gene ID and HGNC symbol with a local gene map. No network access is used at runtime.
 2. **Image prediction.** The three reference PNGs are normalized with ProtiCelli's own `ImageNormalizer`, then passed with the HGNC symbol to [ProtiCelli](https://github.com/CellProfiling/ProtiCelli), which generates the predicted image. The prediction is mapped back to 0 to 255 and saved as an 8-bit PNG.
 
-ProtiCelli uses a learned embedding for each protein it was trained on, so it can only predict proteins in its vocabulary (12,809 entries in `proticelli/data/antibody_map.pkl` in the installed package). The protein search therefore takes the closest match ProtiCelli can predict, and reports the closest match overall alongside it for our own checks. Records with no usable hit are skipped and reported, not failed.
+ProtiCelli uses a learned embedding for each protein it was trained on, so it can only predict proteins in its vocabulary (12,809 entries in `proticelli/data/antibody_map.pkl` in the installed package). The protein search therefore takes the closest match ProtiCelli can predict, and reports the closest match overall alongside it for our own checks. No record is skipped: if no hit is usable, a fixed fallback protein is used (`--fallback_protein`, default GAPDH) and the status column says why, so every record gets an image and the results table holds the evidence for judging it.
 
 ```mermaid
 flowchart TD
@@ -15,16 +15,16 @@ flowchart TD
     B --> C["BLAST the FASTA sequence, per record<br/>up to 25 hits, ranked by bit score"]
     C --> D{"Any of these hits in<br/>ProtiCelli vocabulary?"}
     D -- yes --> U["Use the highest-ranked hit<br/>ProtiCelli knows<br/>(best hit overall also reported)"]
-    D -- "no, 25 searched" --> W["Search again<br/>up to 500 hits"]
+    D -- "no, 25 searched" --> W["Search again<br/>500 hits, then every protein"]
     W --> D2{"Any hit in<br/>vocabulary now?"}
     D2 -- yes --> U
-    D2 -- no --> E["Skip record<br/>status logged, no image"]
+    D2 -- "no, after searching<br/>every protein" --> E["Use fallback protein<br/>(default GAPDH)<br/>status says why"]
     U --> N["Read reference PNGs<br/>normalize with ImageNormalizer"]
-    N --> F["ProtiCelli prediction<br/>batched over eligible records"]
+    E --> N
+    N --> F["ProtiCelli prediction<br/>batched over all records"]
     F --> R["Rescale to 0 to 255<br/>prediction x nucleus maximum"]
     R --> G["Save {prediction_id}.png"]
-    E --> H["Write prediction_results.tsv<br/>one row per input record"]
-    G --> H
+    G --> H["Write prediction_results.tsv<br/>one row per input record"]
 ```
 
 This repository holds only the baseline wrapper. ProtiCelli itself, developed by the Lundberg lab, is installed from its upstream repository, pinned to commit [`1e876ef`](https://github.com/CellProfiling/ProtiCelli/tree/1e876ef21bdd07aa1842653b650f5c09ad2a20ba) (2026-09-15) in `pyproject.toml`; upstream has no release tags yet. Development up to 2026-10-08 happened in a fork, [ProtiCelliDream](https://github.com/cm4ai-anvil-dream-challenge/ProtiCelliDream) (branch `feature/blast-proticelli`, commit `c52db70`), whose ProtiCelli changes are all now upstream.
@@ -114,6 +114,7 @@ Optional arguments:
 
 | Argument | Default | Purpose |
 |---|---|---|
+| `--fallback_protein` | GAPDH | ProtiCelli protein used when no BLAST hit is usable |
 | `--cell_line` | none | ProtiCelli cell line name applied to every record; omit to run without cell line conditioning |
 | `--seed` | none | Random seed; on Apple GPUs (MPS) results are near-identical, not bit-identical, across runs |
 | `--num_inference_steps` | 50 | Diffusion sampling steps |
@@ -197,14 +198,16 @@ This inversion is exact for proteins at least 30% as bright as the nucleus. Dimm
 
 ### Status values
 
-| Status | Meaning |
-|---|---|
-| `predicted` | Image generated |
-| `no_blast_hit` | BLAST ran but returned no hit |
-| `not_in_model_vocabulary` | BLAST found hits, but none whose gene ProtiCelli was trained on, even after the wider search |
-| `predictor_error` | BLAST or gene mapping raised an error (details in `predictor_error`) |
+Every record gets an image. The status says which protein ProtiCelli was asked for:
 
-If every record returns `predictor_error`, the run fails, since that points to a broken environment (for example a missing `blastp` binary or a malformed reference zip) rather than to the data.
+| Status | Protein used |
+|---|---|
+| `predicted` | The highest-ranked BLAST hit in ProtiCelli's vocabulary, however weak |
+| `fallback_no_vocabulary_hit` | Fallback protein: BLAST found hits, but none ProtiCelli was trained on, even searching every protein in the database |
+| `fallback_no_blast_hit` | Fallback protein: BLAST found nothing at all |
+| `fallback_predictor_error` | Fallback protein: BLAST or gene mapping raised an error for this record (details in `predictor_error`) |
+
+If every record returns `fallback_predictor_error`, the run stops instead, since that points to a broken environment (for example a missing `blastp` binary or a malformed reference zip) rather than to the data.
 
 ### Results columns
 
@@ -212,7 +215,8 @@ If every record returns `predictor_error`, the run fails, since that points to a
 |---|---|
 | `prediction_id` | From the input record |
 | `status` | See above |
-| `output_file` | Image filename, empty if not predicted |
+| `output_file` | Image filename |
+| `protein_passed_to_model` | What ProtiCelli was asked to predict: the hit's vocabulary entry, or the fallback protein |
 | `predicted_uniprot_accession`, `predicted_ensembl_gene_id`, `predicted_hgnc_symbol` | The hit used: the highest-ranked hit in ProtiCelli's vocabulary |
 | `model_protein_key` | The vocabulary entry passed to ProtiCelli (an entry can list several symbols) |
 | `predicted_hit_rank` | Rank of the hit used among all hits (1 means the best hit overall was usable) |
@@ -258,7 +262,7 @@ The script prints the top-level contents and the SHA-256 checksum. Record every 
 
 ## Protein search settings
 
-`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, ranks the hits by bit score itself (ties broken by e-value), and walks down the list to the first hit whose gene symbol is in ProtiCelli's vocabulary, matching names the way ProtiCelli does (an exact entry, or a symbol listed inside a combined entry). If none of the 25 qualifies, it searches once more with 500. Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. The limits can be changed with `BLAST_EVALUE`, `BLAST_MAX_TARGET_SEQS` and `BLAST_MAX_TARGET_SEQS_RETRY`.
+`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, ranks the hits by bit score itself (ties broken by e-value), and walks down the list to the first hit whose gene symbol is in ProtiCelli's vocabulary, matching names the way ProtiCelli does (an exact entry, or a symbol listed inside a combined entry). If none of the 25 qualifies, it searches again with 500, then with every protein in the database (25,000, more than the roughly 20,400 it holds). Each wider search runs only if the previous one came back full. If still nothing is usable, the fallback protein is used. Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. The limits can be changed with `BLAST_EVALUE`, `BLAST_MAX_TARGET_SEQS`, `BLAST_MAX_TARGET_SEQS_RETRY` and `BLAST_MAX_TARGET_SEQS_ALL`.
 
 Results are cached by sequence, so a sequence that appears in many records is searched once per run.
 
@@ -271,7 +275,7 @@ Results are cached by sequence, so a sequence that appears in many records is se
 - **BLAST settings against the real database.** The new search settings were checked with a stand-in `blastp`; confirm on the two example records (expected: P55263, ADK, for both), and measure `blast_seconds` on real sequences and confirm whether Matthew changed the BLAST step separately.
 - **EMA weights.** ProtiCelli's `Model.model` loads `checkpoint/unet` (`_load_model()` defaults to `use_ema=False`), while its fine-tuning path loads `checkpoint/unet_ema`. EMA weights are commonly the ones used for sampling in diffusion models, so whether inference should use them is a question for the Lundberg lab. Both folders stay in the weights file until then; dropping the unused one would save a further 1.7 GB.
 - **Reproducibility on Apple GPUs.** With a fixed seed, repeated runs on MPS differ by up to about 0.05% of the output range. Whether CUDA runs on Terra are bit-identical is untested.
-- **Handling of skipped records.** Skipping out-of-vocabulary proteins and failing only on all-error runs are provisional choices; how skipped records are scored is a challenge design question.
+- **Fallback protein.** GAPDH (broadly expressed, cytosolic) is an arbitrary default for records with no usable hit; every such record is flagged in the status column. Whether another default suits scoring better is open.
 - **`cell_line`.** Currently a single optional value applied to every record in a run.
 - **GPU driver on Terra.** Upstream ProtiCelli caps PyTorch below 2.9, so the image's PyTorch should now be a CUDA 12.8 build (previously CUDA 13.0, which needs driver 580 or newer). Confirm from the first log line of a Terra run.
 - **Terra.** The workflow has run under miniWDL but not yet on Terra. That needs the Docker image pushed to a registry Terra can pull from, and the weights file and test inputs uploaded to the workspace bucket.

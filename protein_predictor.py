@@ -79,6 +79,9 @@ BLAST_MAX_TARGET_SEQS = os.environ.get("BLAST_MAX_TARGET_SEQS", "25")
 # BLAST_MAX_TARGET_SEQS hits qualifies, the search is repeated once with
 # this larger limit.
 BLAST_MAX_TARGET_SEQS_RETRY = os.environ.get("BLAST_MAX_TARGET_SEQS_RETRY", "500")
+# Last widening: more targets than the database holds (about 20,400 reviewed
+# human proteins), so every hit BLAST finds at all is considered.
+BLAST_MAX_TARGET_SEQS_ALL = os.environ.get("BLAST_MAX_TARGET_SEQS_ALL", "25000")
 # Queries shorter than this use -task blastp-short, which BLAST+ tunes for
 # short peptides (smaller word size, PAM30).
 BLASTP_SHORT_MAX_LEN = 30
@@ -163,7 +166,7 @@ CACHE_DIR = Path("./predictor_cache")
 POLL_INTERVAL_SEC = 5
 POLL_TIMEOUT_SEC = 300  # ceiling per sequence; blastp vs uniprotkb is usually much faster
 
-PIPELINE_VERSION = "protein_predictor_v0.3_local"
+PIPELINE_VERSION = "protein_predictor_v0.4_local"
 
 # ---- Small helpers --------------------------------------------------------
 
@@ -181,7 +184,7 @@ def sequence_key(seq: str, extra: str = "") -> str:
     """
     if SEARCH_BACKEND == "local":
         search_tag = (f"local|{LOCAL_BLAST_DB}|{BLAST_EVALUE}|{BLAST_MAX_TARGET_SEQS}|"
-                      f"{BLAST_MAX_TARGET_SEQS_RETRY}|{PIPELINE_VERSION}")
+                      f"{BLAST_MAX_TARGET_SEQS_RETRY}|{BLAST_MAX_TARGET_SEQS_ALL}|{PIPELINE_VERSION}")
     else:
         search_tag = f"ebi|{EBI_DATABASE}|{ORGANISM_FILTER}"
 
@@ -642,12 +645,15 @@ def _set_used_hit(result: dict, hit: dict, mapping: dict, rank, model_key=None):
 def _local_search_in_vocabulary(seq: str, vocabulary: "Vocabulary", result: dict):
     """
     Walk the ranked local hits and use the first whose gene symbol is in
-    the model vocabulary, searching again with BLAST_MAX_TARGET_SEQS_RETRY
-    targets only if none of the first BLAST_MAX_TARGET_SEQS qualifies.
+    the model vocabulary. If none of the first BLAST_MAX_TARGET_SEQS (25)
+    qualifies, search again with BLAST_MAX_TARGET_SEQS_RETRY (500), then
+    with BLAST_MAX_TARGET_SEQS_ALL (every protein in the database). Each
+    wider search runs only when the previous one came back full, since
+    otherwise BLAST has already returned every hit it found.
     """
     result["blast_task"] = blast_task_for(seq)
     elapsed = 0.0
-    for limit in (BLAST_MAX_TARGET_SEQS, BLAST_MAX_TARGET_SEQS_RETRY):
+    for limit in (BLAST_MAX_TARGET_SEQS, BLAST_MAX_TARGET_SEQS_RETRY, BLAST_MAX_TARGET_SEQS_ALL):
         t0 = time.perf_counter()
         hits = local_blast_hits(seq, LOCAL_BLAST_DB, limit)
         elapsed += time.perf_counter() - t0

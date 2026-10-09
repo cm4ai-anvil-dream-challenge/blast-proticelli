@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a challenge manifest TSV into the limited JSON consumed by the
+"""Convert a challenge manifest (TSV or CSV) into the limited JSON consumed by the
 BLAST + ProtiCelli inference workflow.
 
 Each manifest row becomes one JSON object, keyed by prediction_id: the
@@ -15,8 +15,13 @@ point at where the files actually live: an absolute local directory for
 miniWDL, or a gs:// bucket path for Terra. Cromwell localizes to
 /cromwell_root on its own, so that prefix should not be written here.
 
+The delimiter follows the file extension: .csv is comma-separated,
+anything else (.tsv, .txt) tab-separated. A UTF-8 byte order mark, which
+Excel adds when saving as "CSV UTF-8", is ignored.
+
 Usage:
     python manifest_to_json.py manifest.tsv -o inputs.json
+    python manifest_to_json.py manifest.csv -o inputs.json
     python manifest_to_json.py manifest.tsv -o inputs.json \
         --path-prefix gs://my-bucket/cm4ai
 """
@@ -51,8 +56,11 @@ def resolve_path(value, prefix):
 
 
 def convert(manifest_path, prefix):
-    with open(manifest_path, newline="") as fh:
-        reader = csv.DictReader(fh, delimiter="\t")
+    delimiter = "," if Path(manifest_path).suffix.lower() == ".csv" else "\t"
+    # utf-8-sig drops the byte order mark Excel writes at the start of
+    # "CSV UTF-8" files; without this the first column name would not match.
+    with open(manifest_path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh, delimiter=delimiter)
         missing_cols = [c for c in FIELD_MAP.values() if c not in reader.fieldnames]
         if missing_cols:
             sys.exit(f"ERROR: manifest is missing required columns: {missing_cols}")
@@ -76,7 +84,7 @@ def convert(manifest_path, prefix):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("manifest", type=Path, help="Manifest TSV")
+    ap.add_argument("manifest", type=Path, help="Manifest TSV, or CSV if the file ends in .csv")
     ap.add_argument("-o", "--output", type=Path, help="Output JSON (default: stdout)")
     ap.add_argument(
         "--path-prefix",

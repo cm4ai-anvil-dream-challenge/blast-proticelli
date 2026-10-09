@@ -33,6 +33,7 @@ Outputs, all written flat into --output_dir:
 
 import argparse
 import csv
+import hashlib
 import zipfile
 from importlib import resources
 import json
@@ -50,6 +51,9 @@ STATUS_PREDICTED = "predicted"
 STATUS_PREDICTOR_ERROR = "predictor_error"          # BLAST or mapping raised
 STATUS_NO_HIT = "no_blast_hit"                      # BLAST ran, returned nothing
 STATUS_NOT_IN_VOCAB = "not_in_model_vocabulary"     # hits found, none ProtiCelli knows
+
+# Written into weights_dir after extraction; holds the weights fingerprint.
+WEIGHTS_MARKER = ".weights_fingerprint"
 
 # The checkpoint subfolder ProtiCelli loads for inference (see load_weights).
 INFERENCE_WEIGHTS_SUBDIR = "unet"
@@ -95,7 +99,7 @@ def parse_args():
                         help="Optional ProtiCelli cell line name applied to every record. Omit to run unconditioned on cell line.")
     parser.add_argument("--weights_zip", required=True, help="Weights zip with checkpoint/, vae/, and reference/ (see module docstring)")
     parser.add_argument("--weights_dir", default="./weights",
-                        help="Where the weights are extracted. Must not already hold checkpoint/ or vae/ from another release.")
+                        help="Where the weights are extracted. Reused by later runs given the same weights zip; a folder holding other weights stops the run.")
     parser.add_argument("--antibody_map", default=None,
                         help="Override path to antibody_map.pkl. Default: proticelli/data/ in the installed package.")
     parser.add_argument("--reference_data_dir", default="./reference_data", help="Where the BLAST DB and gene map are extracted")
@@ -140,11 +144,30 @@ def configure_protein_predictor(blast_db_zip, gene_map_zip, reference_data_dir):
     pp.ensure_reference_data_ready()
 
 
+def weights_fingerprint(zf, members):
+    """
+    Fingerprint of the model weights inside the zip: a hash over each
+    member's name, size and CRC-32. These come from the zip's directory, so
+    this takes milliseconds even for a multi-GB zip, yet changes whenever any
+    weight file's content changes.
+    """
+    h = hashlib.sha256()
+    for info in sorted((zf.getinfo(m) for m in members), key=lambda i: i.filename):
+        h.update(f"{info.filename}|{info.file_size}|{info.CRC}\n".encode())
+    return h.hexdigest()
+
+
 def load_weights(weights_zip, weights_dir):
     """
     Extract what inference needs from the weights zip into weights_dir:
     checkpoint/unet/, vae/, and the two reference zips. checkpoint/unet_ema/
     is left in the zip, since inference does not load it.
+
+    Reuse across runs: after extracting, a fingerprint of the weights (see
+    weights_fingerprint) is written to weights_dir/WEIGHTS_MARKER. A later
+    run given the same zip and weights_dir skips the extraction. If the
+    folder holds weights with a different or missing fingerprint, the run
+    stops instead of using them, so a run always uses the zip it was given.
 
     The zip is read directly rather than through ProtiCelli's
     download_checkpoints(). Upstream's version (since 2026-08) copies the
@@ -152,28 +175,39 @@ def load_weights(weights_zip, weights_dir):
     a 3.3 GB zip means two full copies and two full extractions. Upstream's
     own validators (checkpoint_ready, vae_ready) are still used to check
     the result, so "loadable" means the same thing here as upstream.
-
-    Extraction goes to a run-local weights_dir rather than the proticelli
-    package directory, so a run always uses the zip it was given.
     """
     from proticelli.utils.download import checkpoint_ready, vae_ready
 
     weights_dir = Path(weights_dir)
-    for d in ("checkpoint", "vae"):
-        if (weights_dir / d).exists():
-            raise FileExistsError(
-                f"{weights_dir / d} already exists; use an empty --weights_dir so this run "
-                f"cannot pick up weights from a different release"
-            )
+    marker = weights_dir / WEIGHTS_MARKER
+    model_prefixes = (f"checkpoint/{INFERENCE_WEIGHTS_SUBDIR}/", "vae/")
 
-    wanted = (f"checkpoint/{INFERENCE_WEIGHTS_SUBDIR}/", "vae/", BLAST_DB_MEMBER, GENE_MAP_MEMBER)
     with zipfile.ZipFile(weights_zip) as zf:
         names = zf.namelist()
         missing = [m for m in (BLAST_DB_MEMBER, GENE_MAP_MEMBER) if m not in names]
         if missing:
             raise FileNotFoundError(f"{weights_zip} is missing {missing}; rebuild it with build_weights_zip.sh")
-        members = [n for n in names if n.startswith(wanted)]
-        zf.extractall(weights_dir, members=members)
+        model_members = [n for n in names if n.startswith(model_prefixes)]
+        fingerprint = weights_fingerprint(zf, model_members)
+
+        existing = [d for d in ("checkpoint", "vae") if (weights_dir / d).exists()]
+        if existing:
+            recorded = marker.read_text().strip() if marker.is_file() else None
+            if recorded != fingerprint:
+                why = "come from a different weights zip" if recorded else "have no record of their source"
+                raise FileExistsError(
+                    f"{weights_dir} already holds weights that {why}; point --weights_dir at an empty "
+                    f"folder, or delete {weights_dir}, so this run cannot use the wrong weights"
+                )
+            print(f"Reusing weights in {weights_dir} (match {weights_zip})")
+        else:
+            print(f"Extracting weights to {weights_dir}")
+            zf.extractall(weights_dir, members=model_members)
+            weights_dir.mkdir(parents=True, exist_ok=True)
+            marker.write_text(fingerprint + "\n")
+
+        # The reference zips are small (a few MB); always refresh them.
+        zf.extractall(weights_dir, members=[BLAST_DB_MEMBER, GENE_MAP_MEMBER])
 
     # ProtiCelli's Model._load_model() falls back to a randomly initialized
     # model, with no error, when it finds no weights. Predictions would still

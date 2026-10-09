@@ -1,0 +1,30 @@
+[
+  {
+    "prediction_id": "1",
+    "microtubules_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/1_microtubule.png",
+    "er_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/1_er.png",
+    "nucleus_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/1_nucleus.png",
+    "fasta_file": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/1.faa"
+  },
+  {
+    "prediction_id": "2",
+    "microtubules_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/2_microtubule.png",
+    "er_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/2_er.png",
+    "nucleus_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/2_nucleus.png",
+    "fasta_file": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/2.faa"
+  },
+  {
+    "prediction_id": "159",
+    "microtubules_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/159_microtubule.png",
+    "er_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/159_er.png",
+    "nucleus_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/159_nucleus.png",
+    "fasta_file": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/159.faa"
+  },
+  {
+    "prediction_id": "199",
+    "microtubules_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/199_microtubule.png",
+    "er_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/199_er.png",
+    "nucleus_image": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/199_nucleus.png",
+    "fasta_file": "/Users/lusardi/Documents/EllrottLab/blast-proticelli/~/Documents/EllrottLab/cm4ai_project/SampleImages/test_data/199.faa"
+  }
+]

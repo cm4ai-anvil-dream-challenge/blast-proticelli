@@ -64,6 +64,8 @@ PREDICTOR_FIELDS = [
     "percent_identity",
     "e_value",
     "alignment_length",
+    "bit_score",
+    "blast_task",
     "gene_candidate_count",
     "mapping_ambiguous",
     "search_database",

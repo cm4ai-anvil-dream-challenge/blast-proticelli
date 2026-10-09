@@ -54,6 +54,19 @@ LOCAL_BLAST_DB = os.environ.get("LOCAL_BLAST_DB", "")
 BLASTP_BIN = os.environ.get("BLASTP_BIN", "blastp")
 MAKEBLASTDB_BIN = os.environ.get("MAKEBLASTDB_BIN", "makeblastdb")
 
+# Local search settings. The baseline is deliberately a "worst case"
+# protein step: it always takes the best-scoring hit, however weak, so the
+# e-value cutoff is relaxed well past BLAST's default of 10.
+# BLAST_MAX_TARGET_SEQS is more than 1 because -max_target_seqs 1 can
+# return the first good hit found rather than the best one (Shah et al.
+# 2019, Bioinformatics 35:1613, https://doi.org/10.1093/bioinformatics/bty833);
+# hits are then ranked here by bitscore.
+BLAST_EVALUE = os.environ.get("BLAST_EVALUE", "1000")
+BLAST_MAX_TARGET_SEQS = os.environ.get("BLAST_MAX_TARGET_SEQS", "25")
+# Queries shorter than this use -task blastp-short, which BLAST+ tunes for
+# short peptides (smaller word size, PAM30).
+BLASTP_SHORT_MAX_LEN = 30
+
 # "mygene" (default, unchanged) or "local" (see build_human_gene_map.sh and
 # local_gene_lookup below). Local mapping needs LOCAL_GENE_MAP pointing at
 # the compact accession -> gene id file that script produces.
@@ -134,7 +147,7 @@ CACHE_DIR = Path("./predictor_cache")
 POLL_INTERVAL_SEC = 5
 POLL_TIMEOUT_SEC = 300  # ceiling per sequence; blastp vs uniprotkb is usually much faster
 
-PIPELINE_VERSION = "protein_predictor_v0.1_local"
+PIPELINE_VERSION = "protein_predictor_v0.2_local"
 
 # ---- Small helpers --------------------------------------------------------
 
@@ -151,7 +164,7 @@ def sequence_key(seq: str) -> str:
     orphaned, harmless dead files.
     """
     if SEARCH_BACKEND == "local":
-        search_tag = f"local|{LOCAL_BLAST_DB}"
+        search_tag = f"local|{LOCAL_BLAST_DB}|{BLAST_EVALUE}|{BLAST_MAX_TARGET_SEQS}|{PIPELINE_VERSION}"
     else:
         search_tag = f"ebi|{EBI_DATABASE}|{ORGANISM_FILTER}"
 
@@ -304,20 +317,27 @@ def build_local_db(fasta_path: str, db_prefix: str):
 def local_blast_search(seq: str, db_prefix: str) -> dict:
     """
     Run blastp locally against a database built with build_local_db, and
-    return the top hit in the same shape parse_top_hit returns for the
-    EBI backend. No organism filter is applied here: if the database was
-    built from a human-only FASTA (as intended), every hit already is
-    human by construction, there is nothing to filter after the fact.
+    return the highest-scoring hit in the same shape parse_top_hit returns
+    for the EBI backend, plus its bit score and the BLAST task used.
+
+    Up to BLAST_MAX_TARGET_SEQS hits are requested and ranked here by bit
+    score (ties broken by e-value), rather than trusting -max_target_seqs 1
+    to return the best one. Sequences shorter than BLASTP_SHORT_MAX_LEN use
+    -task blastp-short. No organism filter is applied: the database is
+    built from a human-only FASTA, so every hit is human by construction.
 
     Raises CalledProcessError if blastp itself fails (e.g. bad db path);
     a clean "no hit found" is a successful run with empty stdout, not an
     exception, same distinction the EBI path makes.
     """
+    task = "blastp-short" if len(seq) < BLASTP_SHORT_MAX_LEN else "blastp"
     empty = {
         "uniprot_accession": None,
         "percent_identity": None,
         "e_value": None,
         "alignment_length": None,
+        "bit_score": None,
+        "blast_task": task,
     }
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".faa", delete=False) as f:
@@ -328,23 +348,28 @@ def local_blast_search(seq: str, db_prefix: str) -> dict:
         proc = subprocess.run(
             [
                 BLASTP_BIN,
+                "-task", task,
                 "-query", query_path,
                 "-db", db_prefix,
                 "-outfmt", "6",
-                "-max_target_seqs", "1",
+                "-evalue", BLAST_EVALUE,
+                "-max_target_seqs", BLAST_MAX_TARGET_SEQS,
             ],
             capture_output=True, text=True, timeout=60, check=True,
         )
     finally:
         os.unlink(query_path)
 
-    if not proc.stdout.strip():
-        return empty
-
     # outfmt 6 default columns: qseqid sseqid pident length mismatch gapopen
-    # qstart qend sstart send evalue bitscore
-    fields = proc.stdout.strip().splitlines()[0].split("\t")
-    sseqid, pident, length, evalue = fields[1], fields[2], fields[3], fields[10]
+    # qstart qend sstart send evalue bitscore. One line per HSP, so a
+    # subject can appear more than once; ranking every line still picks the
+    # best-scoring subject.
+    rows = [line.split("\t") for line in proc.stdout.splitlines() if line.strip()]
+    if not rows:
+        return empty
+    best = max(rows, key=lambda r: (float(r[11]), -float(r[10])))
+
+    sseqid, pident, length, evalue, bitscore = best[1], best[2], best[3], best[10], best[11]
     accession = sseqid.split("|")[1] if "|" in sseqid else sseqid
 
     return {
@@ -352,6 +377,8 @@ def local_blast_search(seq: str, db_prefix: str) -> dict:
         "percent_identity": round(float(pident), 1),
         "e_value": evalue,
         "alignment_length": int(length),
+        "bit_score": float(bitscore),
+        "blast_task": task,
     }
 
 
@@ -484,6 +511,8 @@ def predict_for_sequence(seq: str, force_rerun: bool = False) -> dict:
         "percent_identity": None,
         "e_value": None,
         "alignment_length": None,
+        "bit_score": None,
+        "blast_task": None,
         "mapping_tool": "local_uniprot_ensembl_map" if MAPPING_BACKEND == "local" else "mygene.info",
         "gene_candidate_count": 0,
         "mapping_ambiguous": False,
@@ -515,6 +544,8 @@ def predict_for_sequence(seq: str, force_rerun: bool = False) -> dict:
         result["percent_identity"] = hit["percent_identity"]
         result["e_value"] = hit["e_value"]
         result["alignment_length"] = hit["alignment_length"]
+        result["bit_score"] = hit.get("bit_score")
+        result["blast_task"] = hit.get("blast_task")
 
         if hit["uniprot_accession"]:
             if MAPPING_BACKEND == "local":

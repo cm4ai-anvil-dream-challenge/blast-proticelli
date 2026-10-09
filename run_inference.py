@@ -17,7 +17,7 @@ Everything the model needs at runtime ships in one weights zip
 (--weights_zip), built with scripts/build_weights_zip.sh:
     blast_proticelli_weights.zip
         checkpoint/unet/                ProtiCelli model weights (loaded for inference)
-        checkpoint/unet_ema/            ProtiCelli EMA weights (not currently loaded)
+        checkpoint/unet_ema/            ProtiCelli EMA weights (not loaded, not extracted)
         vae/                            ProtiCelli VAE weights
         reference/human_blast_db.zip    from build_human_blast_db.sh
         reference/human_gene_map.zip    from build_human_gene_map.sh
@@ -126,51 +126,54 @@ def configure_protein_predictor(blast_db_zip, gene_map_zip, reference_data_dir):
 
 def load_weights(weights_zip, weights_dir):
     """
-    Extract the weights zip: checkpoint/ and vae/ via ProtiCelli's own
-    loader, and the two reference zips directly.
+    Extract what inference needs from the weights zip into weights_dir:
+    checkpoint/unet/, vae/, and the two reference zips. checkpoint/unet_ema/
+    is left in the zip, since inference does not load it.
 
-    download_checkpoints() takes URLs, so the local path is converted to a
-    file:// URL here, keeping every user-facing argument a plain path. The
-    same URL is passed for both checkpoint and vae: the first extraction
-    places both folders, so the second is skipped.
+    The zip is read directly rather than through ProtiCelli's
+    download_checkpoints(). Upstream's version (since 2026-08) copies the
+    archive to a temporary file and extracts it once per asset, which for
+    a 3.3 GB zip means two full copies and two full extractions. Upstream's
+    own validators (checkpoint_ready, vae_ready) are still used to check
+    the result, so "loadable" means the same thing here as upstream.
 
     Extraction goes to a run-local weights_dir rather than the proticelli
-    package directory. download_checkpoints() skips extraction whenever
-    checkpoint/ already exists, so extracting into the package would
-    silently reuse whatever weights were already installed and ignore the
-    zip this run was given.
+    package directory, so a run always uses the zip it was given.
     """
-    weights_url = Path(weights_zip).resolve().as_uri()
-    paths = Model.download_checkpoints(
-        dest_dir=weights_dir,
-        checkpoint_url=weights_url,
-        vae_url=weights_url,
-    )
-    for key, d in paths.items():
-        if not Path(d).is_dir():
-            raise FileNotFoundError(f"{key} not found at {d}; check the layout of {weights_zip}")
+    from proticelli.utils.download import checkpoint_ready, vae_ready
+
+    weights_dir = Path(weights_dir)
+    for d in ("checkpoint", "vae"):
+        if (weights_dir / d).exists():
+            raise FileExistsError(
+                f"{weights_dir / d} already exists; use an empty --weights_dir so this run "
+                f"cannot pick up weights from a different release"
+            )
+
+    wanted = (f"checkpoint/{INFERENCE_WEIGHTS_SUBDIR}/", "vae/", BLAST_DB_MEMBER, GENE_MAP_MEMBER)
+    with zipfile.ZipFile(weights_zip) as zf:
+        names = zf.namelist()
+        missing = [m for m in (BLAST_DB_MEMBER, GENE_MAP_MEMBER) if m not in names]
+        if missing:
+            raise FileNotFoundError(f"{weights_zip} is missing {missing}; rebuild it with build_weights_zip.sh")
+        members = [n for n in names if n.startswith(wanted)]
+        zf.extractall(weights_dir, members=members)
 
     # ProtiCelli's Model._load_model() falls back to a randomly initialized
     # model, with no error, when it finds no weights. Predictions would still
-    # be written and reported as successful. Require the folder inference
+    # be written and reported as successful. Require the folders inference
     # actually loads: checkpoint/unet (Model.model calls _load_model() with
-    # the default use_ema=False, so checkpoint/unet_ema is not used).
-    model_weights = Path(paths["checkpoint_dir"]) / INFERENCE_WEIGHTS_SUBDIR
-    if not model_weights.is_dir():
+    # the default use_ema=False) and vae/.
+    if not checkpoint_ready(weights_dir):
         raise FileNotFoundError(
-            f"{model_weights} not found; ProtiCelli would silently use random weights. "
-            f"Check the layout of {weights_zip}"
+            f"{weights_dir}/checkpoint/{INFERENCE_WEIGHTS_SUBDIR} is missing or incomplete; ProtiCelli "
+            f"would silently use random weights. Check the layout of {weights_zip}"
         )
+    if not vae_ready(weights_dir):
+        raise FileNotFoundError(f"{weights_dir}/vae is missing or incomplete; check the layout of {weights_zip}")
 
-    # The reference zips are pulled out as-is; protein_predictor extracts them.
-    with zipfile.ZipFile(weights_zip) as zf:
-        missing = [m for m in (BLAST_DB_MEMBER, GENE_MAP_MEMBER) if m not in zf.namelist()]
-        if missing:
-            raise FileNotFoundError(f"{weights_zip} is missing {missing}; rebuild it with build_weights_zip.sh")
-        for member in (BLAST_DB_MEMBER, GENE_MAP_MEMBER):
-            zf.extract(member, weights_dir)
-
-    return paths, Path(weights_dir) / BLAST_DB_MEMBER, Path(weights_dir) / GENE_MAP_MEMBER
+    paths = {"checkpoint_dir": str(weights_dir / "checkpoint"), "vae_dir": str(weights_dir / "vae")}
+    return paths, weights_dir / BLAST_DB_MEMBER, weights_dir / GENE_MAP_MEMBER
 
 
 def find_antibody_map(explicit_path=None):

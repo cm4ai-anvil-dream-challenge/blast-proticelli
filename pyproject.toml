@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blast-proticelli"
+version = "0.2.0"
+description = "BLAST-ProtiCelli baseline for the CM4AI DREAM Challenge: FASTA to gene symbol by BLAST, then ProtiCelli image prediction"
+readme = "README.md"
+# Upstream ProtiCelli requires >=3.10,<3.14.
+requires-python = ">=3.10,<3.14"
+
+dependencies = [
+    # Upstream ProtiCelli, pinned to one commit. Upstream has no tags or PyPI
+    # release yet; replace this with a release tag once one exists.
+    # The archive URL (rather than git+https) means pip needs no git binary,
+    # which the slim Docker base image does not have.
+    "proticelli @ https://github.com/CellProfiling/ProtiCelli/archive/1e876ef21bdd07aa1842653b650f5c09ad2a20ba.zip",
+    "numpy",
+    "pandas",
+    "requests",
+    "scikit-image",
+]
+
+[tool.setuptools]
+# Top-level scripts, installed as plain modules (no package directory).
+py-modules = ["run_inference", "protein_predictor", "pipeline_checks"]

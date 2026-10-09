@@ -5,7 +5,7 @@
 #
 # Build (--platform is required on an Apple Silicon Mac: Terra runs x86_64.
 # Omitting it fails at the blastp check below, since BLAST is x86_64 only):
-#   docker buildx build --platform linux/amd64 -t blast-proticelli:0.1.0 --load .
+#   docker buildx build --platform linux/amd64 -t blast-proticelli:0.2.0 --load .
 #
 # Run: see README.md. The WDL task calls
 #   python /app/run_inference.py --inputs ... --weights_zip ... --output_dir ...
@@ -24,10 +24,10 @@ RUN apt-get update \
  && ln -s "/opt/ncbi-blast-${BLAST_VERSION}+/bin/blastp" /usr/local/bin/blastp \
  && ln -s "/opt/ncbi-blast-${BLAST_VERSION}+/bin/makeblastdb" /usr/local/bin/makeblastdb
 
-# Install the ProtiCelli fork as a regular (non-editable) package, then keep
-# only the three pipeline scripts. Removing the source tree means
-# "import proticelli" can only resolve to the installed package, which is
-# what the build-time check below verifies.
+# Install the wrapper, which pulls in upstream ProtiCelli pinned to one
+# commit (see pyproject.toml), then keep only the pipeline scripts in /app.
+# Removing the source tree means "import proticelli" can only resolve to
+# the installed package, which is what the build-time check below verifies.
 COPY . /tmp/build
 RUN pip install --no-cache-dir /tmp/build \
  && mkdir -p /app \

@@ -12,14 +12,14 @@ This runs the baseline end to end on the two example records in the repository, 
 ## 1. Clone the repository
 
 ```bash
-git clone -b feature/blast-proticelli https://github.com/cm4ai-anvil-dream-challenge/ProtiCelliDream.git
-cd ProtiCelliDream
+git clone https://github.com/cm4ai-anvil-dream-challenge/blast-proticelli.git
+cd blast-proticelli
 ```
 
 ## 2. Build the Docker image
 
 ```bash
-docker buildx build --platform linux/amd64 -t blast-proticelli:0.1.0 --load .
+docker buildx build --platform linux/amd64 -t blast-proticelli:0.2.0 --load .
 ```
 
 The first build takes 10 to 15 minutes, mostly installing PyTorch.
@@ -41,7 +41,7 @@ python3 scripts/manifest_to_json.py manifest.tsv -o inputs.json
 python3 scripts/make_wdl_inputs.py \
   --records inputs.json \
   --weights_file blast_proticelli_weights_v2.zip \
-  --docker blast-proticelli:0.1.0 \
+  --docker blast-proticelli:0.2.0 \
   --seed 1 --num_inference_steps 10 \
   -o wdl_inputs.json
 ```
@@ -64,7 +64,7 @@ On a laptop without an NVIDIA GPU the task runs on the CPU (under emulation on A
 
 ## 6. Check the results
 
-miniWDL prints the output paths when it finishes, and `_LAST/outputs.json` lists them. You should get two images, `cell_0.tiff` and `cell_1.tiff`, and `prediction_results.tsv`:
+miniWDL prints the output paths when it finishes, and `_LAST/outputs.json` lists them. You should get two 8-bit PNGs, `cell_0.png` and `cell_1.png`, and `prediction_results.tsv` (selected columns):
 
 | prediction_id | status | predicted_uniprot_accession | predicted_hgnc_symbol | percent_identity | alignment_length |
 |---|---|---|---|---|---|

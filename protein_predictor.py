@@ -2,20 +2,28 @@
 """
 protein_predictor.py
 
-Lightweight, "zero development" baseline protein predictor for the CM4AI
-DREAM Challenge stress test.
+Protein identification for the BLAST-ProtiCelli baseline: amino acid
+sequence -> UniProt accession -> Ensembl gene ID and HGNC symbol.
 
-For each unique aa_sequence in a per-cell manifest:
-  1. BLASTp the sequence against UniProtKB via the EBI Job Dispatcher REST
-     API (top hit only, no identity/e-value filtering).
-  2. Map the resulting UniProt accession to an Ensembl gene ID via
-     MyGene.info.
+Two backends for each step:
+  search:  "local" blastp against a reviewed human Swiss-Prot database
+           (build_human_blast_db.sh), or "ebi", the EBI Job Dispatcher REST API.
+  mapping: "local" lookup table (build_human_gene_map.sh), or "mygene"
+           (MyGene.info).
 
-Results are cached on disk keyed by sequence, then joined back onto every
-row of the manifest that shares that sequence, and written out as a new
-TSV alongside the diagnostic and provenance columns.
+run_inference.py always forces both to "local" and points them at the
+reference zips inside the weights file, so a pipeline run needs no
+network access. The EBI and MyGene.info backends remain for development.
 
-Usage:
+The local search always reports the best-scoring hit (highest bit score),
+however weak: the baseline is meant as a "worst case" protein step. See
+local_blast_search for the settings. The FASTA header is never read.
+
+Results are cached on disk keyed by sequence plus search and mapping
+settings. Standalone use, over a manifest with an aa_sequence_fasta_path
+column (backends from SEARCH_BACKEND / MAPPING_BACKEND, default ebi and
+mygene):
+
     python protein_predictor.py manifest.tsv predicted_manifest.tsv
 
 Config (edit below or override with an env var):

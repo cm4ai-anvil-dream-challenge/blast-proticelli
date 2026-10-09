@@ -80,7 +80,7 @@ def validate_image_files(
     only_issues_to_csv=False,
     **kwargs,
 ):
-    """Validate a batch of files. Returns (passing_images, report_df) — failed files excluded from images."""
+    """Validate a batch of files. Returns (passing_images, report_df); failed files are left out of images."""
     images, records = [], []
 
     if expected_hw is None or expected_dtype is None:

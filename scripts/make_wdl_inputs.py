@@ -12,7 +12,7 @@ Usage:
     python scripts/make_wdl_inputs.py \
         --records inputs.json \
         --weights_file blast_proticelli_weights_v2.zip \
-        --docker blast-proticelli:0.1.0 \
+        --docker blast-proticelli:0.2.0 \
         --seed 1 --num_inference_steps 10 \
         -o wdl_inputs.json
 """
@@ -34,7 +34,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--records", required=True, help="JSON from manifest_to_json.py")
     ap.add_argument("--weights_file", required=True, help="Weights zip (local path or gs:// URI)")
-    ap.add_argument("--docker", required=True, help="Docker image, e.g. blast-proticelli:0.1.0")
+    ap.add_argument("--docker", required=True, help="Docker image, e.g. blast-proticelli:0.2.0")
     ap.add_argument("--cell_line", default=None)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--num_inference_steps", type=int, default=None, help="Default in the WDL: 50")

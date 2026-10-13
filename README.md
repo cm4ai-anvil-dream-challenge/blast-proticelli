@@ -2,6 +2,43 @@
 
 A baseline submission for the CM4AI DREAM Challenge on predicting protein subcellular localization. Given reference images of a cell (microtubules, nucleus, ER) and the amino acid sequence of a protein, it generates a predicted fluorescence image of where that protein localizes.
 
+
+## How to run evaluator
+
+
+Get the code
+```
+git clone https://github.com/cm4ai-anvil-dream-challenge/blast-proticelli.git
+```
+
+Pull a prebuilt image
+```
+docker pull quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0
+```
+
+If you want to try on a Mac laptop (notice: this will be slow)
+```
+docker pull --platform linux/amd64 quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0
+```
+
+Build an input file
+```
+./scripts/make_wdl_inputs.py --dir ../test_data --weights-file ../blast_proticelli_weights_v2.zip
+```
+
+Install MiniWDL
+```
+pip install miniwdl
+```
+
+Run miniwdl with the weights
+```
+miniwdl run ./blast_proticelli.wdl -i wdl_inputs.json
+```
+
+
+## Pipeline description
+
 The pipeline has two stages:
 
 1. **Protein identification.** The amino acid sequence is searched with BLAST against a local database of reviewed human UniProt (Swiss-Prot) entries. Hits are ranked by bit score, and the highest-ranked hit whose gene ProtiCelli knows is used, however weak; it is mapped from its UniProt accession to an Ensembl gene ID and HGNC symbol with a local gene map. No network access is used at runtime.

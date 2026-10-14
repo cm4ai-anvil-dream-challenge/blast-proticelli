@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+from glob import glob
 
 WORKFLOW = "blast_proticelli"
 
@@ -32,29 +33,31 @@ def resolve(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--records", required=True, help="JSON from manifest_to_json.py")
-    ap.add_argument("--weights_file", required=True, help="Weights zip (local path or gs:// URI)")
-    ap.add_argument("--docker", required=True, help="Docker image, e.g. blast-proticelli:0.2.0")
-    ap.add_argument("--cell_line", default=None)
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--num_inference_steps", type=int, default=None, help="Default in the WDL: 50")
+    ap.add_argument("--dir", required=True, help="Directory containing input files")
+    ap.add_argument("--weights-file", required=True, help="Weights zip (local path or gs:// URI)")
     ap.add_argument("-o", "--output", default="wdl_inputs.json")
     args = ap.parse_args()
 
-    with open(args.records) as f:
-        records = json.load(f)
-    if isinstance(records, dict):
-        records = [records]
+    records = []
+    for faa_path in glob(os.path.join(args.dir, "*.faa")):
+        prediction_id = os.path.basename(faa_path).replace(".faa", "")
+
+        er_path = faa_path.replace(".faa", "_er.png")
+        microtubule_path = faa_path.replace(".faa", "_microtubule.png")
+        nucleus_path = faa_path.replace(".faa", "_nucleus.png")
+        if os.path.exists(er_path) and os.path.exists(microtubule_path) and os.path.exists(nucleus_path):
+            records.append({
+                "prediction_id": prediction_id,
+                "microtubules_image": resolve(microtubule_path),
+                "er_image": resolve(er_path),
+                "nucleus_image": resolve(nucleus_path),
+                "fasta_file": resolve(faa_path),
+            })
 
     inputs = {
         f"{WORKFLOW}.records": records,
-        f"{WORKFLOW}.weights_file": resolve(args.weights_file),
-        f"{WORKFLOW}.docker": args.docker,
+        f"{WORKFLOW}.weights_file": resolve(args.weights_file)
     }
-    optional = {"cell_line": args.cell_line, "seed": args.seed, "num_inference_steps": args.num_inference_steps}
-    for key, value in optional.items():
-        if value is not None:
-            inputs[f"{WORKFLOW}.{key}"] = value
 
     missing = [p for p in [inputs[f"{WORKFLOW}.weights_file"]] if "://" not in p and not os.path.isfile(p)]
     if missing:

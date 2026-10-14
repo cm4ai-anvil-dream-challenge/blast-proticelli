@@ -30,6 +30,27 @@ Everything the model needs at runtime ships in one weights zip
 Outputs, all written flat into --output_dir:
     {prediction_id}.png        one per record that could be predicted (8-bit, 0 to 255)
     prediction_results.tsv     one row per input record, predicted or not
+
+Optional arguments:
+
+| Argument | Default | Purpose |
+|---|---|---|
+| `--fallback_protein` | GAPDH | ProtiCelli protein used when no BLAST hit is usable |
+| `--cell_line` | none | ProtiCelli cell line name applied to every record; omit to run without cell line conditioning |
+| `--seed` | none | Random seed; on Apple GPUs (MPS) results are near-identical, not bit-identical, across runs |
+| `--num_inference_steps` | 50 | Diffusion sampling steps |
+| `--batch_size` | 4 | ProtiCelli prediction batch size |
+| `--weights_dir` | `./weights` | Where model weights are extracted |
+| `--reference_data_dir` | `./reference_data` | Where the BLAST database and gene map are extracted |
+| `--antibody_map` | package copy | Override path to ProtiCelli's vocabulary file |
+
+Weights always extract to `--weights_dir`, never into the installed `proticelli` package. After extracting, a 
+fingerprint of the model weights (each file's name, size and CRC-32, read from the zip's directory in milliseconds) 
+is saved there, so a later run given the same weights file reuses the folder without extracting again 
+(0.1 s rather than about 11 s). A folder holding weights with a different or missing fingerprint stops the 
+run, so each run uses the weights file it was given. Any `LOCAL_BLAST_DB` or `LOCAL_GENE_MAP` environment 
+variables left over from development are ignored for the same reason.
+    
 """
 
 import argparse

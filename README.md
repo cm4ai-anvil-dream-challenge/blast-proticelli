@@ -2,55 +2,38 @@
 
 A baseline submission for the CM4AI DREAM Challenge on predicting protein subcellular localization. Given reference images of a cell (microtubules, nucleus, ER) and the amino acid sequence of a protein, it generates a predicted fluorescence image of where that protein localizes.
 
-The pipeline has two stages:
 
-1. **Protein identification.** The amino acid sequence is searched with BLAST against a local database of reviewed human UniProt (Swiss-Prot) entries. Hits are ranked by bit score, and the highest-ranked hit whose gene ProtiCelli knows is used, however weak; it is mapped from its UniProt accession to an Ensembl gene ID and HGNC symbol with a local gene map. No network access is used at runtime.
-2. **Image prediction.** The three reference PNGs are normalized with ProtiCelli's own `ImageNormalizer`, then passed with the HGNC symbol to [ProtiCelli](https://github.com/CellProfiling/ProtiCelli), which generates the predicted image. The prediction is mapped back to 0 to 255 and saved as an 8-bit PNG.
+## How to run evaluator
 
-ProtiCelli uses a learned embedding for each protein it was trained on, so it can only predict proteins in its vocabulary (12,809 entries in `proticelli/data/antibody_map.pkl` in the installed package). The protein search therefore takes the closest match ProtiCelli can predict, and reports the closest match overall alongside it for our own checks. No record is skipped: if no hit is usable, a fixed fallback protein is used (`--fallback_protein`, default GAPDH) and the status column says why, so every record gets an image and the results table holds the evidence for judging it.
 
-```mermaid
-flowchart TD
-    A["Load input records<br/>(JSON from manifest_to_json.py)"] --> B["Extract weights file<br/>ProtiCelli weights, BLAST database, gene map"]
-    B --> C["BLAST the FASTA sequence, per record<br/>up to 25 hits, ranked by bit score"]
-    C --> D{"Any of these hits in<br/>ProtiCelli vocabulary?"}
-    D -- yes --> U["Use the highest-ranked hit<br/>ProtiCelli knows<br/>(best hit overall also reported)"]
-    D -- "no, 25 searched" --> W["Search again<br/>500 hits, then every protein"]
-    W --> D2{"Any hit in<br/>vocabulary now?"}
-    D2 -- yes --> U
-    D2 -- "no, after searching<br/>every protein" --> E["Use fallback protein<br/>(default GAPDH)<br/>status says why"]
-    U --> N["Read reference PNGs<br/>normalize with ImageNormalizer"]
-    E --> N
-    N --> F["ProtiCelli prediction<br/>batched over all records"]
-    F --> R["Rescale to 0 to 255<br/>prediction x nucleus maximum"]
-    R --> G["Save {prediction_id}.png"]
-    G --> H["Write prediction_results.tsv<br/>one row per input record"]
+Get the code
+```
+git clone https://github.com/cm4ai-anvil-dream-challenge/blast-proticelli.git
 ```
 
-This repository holds only the baseline wrapper. ProtiCelli itself, developed by the Lundberg lab, is installed from its upstream repository, pinned to commit [`1e876ef`](https://github.com/CellProfiling/ProtiCelli/tree/1e876ef21bdd07aa1842653b650f5c09ad2a20ba) (2026-09-15) in `pyproject.toml`; upstream has no release tags yet. Development up to 2026-10-08 happened in a fork, [ProtiCelliDream](https://github.com/cm4ai-anvil-dream-challenge/ProtiCelliDream) (branch `feature/blast-proticelli`, commit `c52db70`), whose ProtiCelli changes are all now upstream.
+### Pull a prebuilt image
+```
+docker pull quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0
+```
 
-## Repository layout
+If you want to try on a Mac laptop (notice: this will be slow)
+```
+docker pull --platform linux/amd64 quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0
+```
 
-| Path | Purpose |
-|---|---|
-| `run_inference.py` | Runs the full pipeline over a set of input records |
-| `pyproject.toml` | Dependencies, including the pinned upstream ProtiCelli |
-| `Dockerfile` | Inference image: BLAST+, ProtiCelli, and the pipeline scripts |
-| `protein_predictor.py` | Amino acid sequence to UniProt accession, Ensembl gene ID, and HGNC symbol |
-| `image_scaling.py` | PNG input, normalization with ProtiCelli's `ImageNormalizer`, and output rescaling to 0 to 255 |
-| `pipeline_checks.py` | Optional input validation helpers (not called by `run_inference.py`) |
-| `scripts/manifest_to_json.py` | Converts a manifest TSV into the input JSON |
-| `scripts/build_human_blast_db.sh` | Builds the reference BLAST database zip |
-| `scripts/build_human_gene_map.sh` | Builds the reference gene map zip |
-| `scripts/build_weights_zip.sh` | Assembles the weights file from the model weights and reference zips |
-| `scripts/split_reference_channels.py` | Splits a multichannel reference TIFF into single-channel TIFFs (earlier test data preparation) |
-| `blast_proticelli.wdl` | WDL workflow wrapping `run_inference.py` for Terra or miniWDL |
-| `scripts/make_wdl_inputs.py` | Builds the WDL inputs JSON from the input records |
-| `manifest.tsv`, `test_image_reference_input/`, `test_fasta_reference_input/` | Two-record example: manifest, split reference images, and FASTA files |
+### Build the image
 
-## Inputs
+The image holds code only (Python 3.11, BLAST+ 2.17.0, ProtiCelli at the pinned commit, and the pipeline scripts in `/app`); weights and reference data arrive at runtime in the weights file. Build for x86_64, which Terra uses, including on Apple Silicon:
 
-### Records
+```bash
+docker buildx build --platform linux/amd64 -t blast-proticelli:0.2.0 --load .
+```
+
+
+### Build an input file
+```
+./scripts/make_wdl_inputs.py --dir ../test_data --weights-file ../blast_proticelli_weights_v2.zip
+```
 
 Each prediction is one record: three single-channel reference images plus one FASTA file holding a single amino acid sequence. If a FASTA file holds several sequences, the first is used with a warning, and `fasta_record_count` in the results shows how many there were. (Six files in the 2026-10 sample set list several Ensembl proteins for one antibody; challenge FASTAs are to hold one each.)
 
@@ -70,15 +53,18 @@ Each prediction is one record: three single-channel reference images plus one FA
 
 Reference images must be single-channel 8-bit PNGs, 512 x 512, as in the challenge specification; anything else stops the run with an error. Each image set is normalized with ProtiCelli's `ImageNormalizer` (see [Output intensity](#output-intensity)). No resampling happens in this pipeline. The FASTA header never feeds the prediction: the baseline identifies the protein from the sequence alone. Its `key=value` fields (`hpa_antibody_id`, `ensembl_protein_id`, `ensembl`) are copied into the results table for our own checks, and are left blank when absent.
 
-To generate the JSON from a manifest TSV (which must include a `prediction_id` column):
 
-```bash
-python scripts/manifest_to_json.py manifest.tsv -o inputs.json
+
+### Install MiniWDL
+```
+pip install miniwdl
 ```
 
-Relative paths in the manifest are resolved against the manifest's directory by default, or against `--path-prefix` (for example a `gs://` bucket path on Terra).
+### Run miniwdl with the weights
+```
+miniwdl run ./blast_proticelli.wdl -i wdl_inputs.json
+```
 
-The repository includes a two-record example (`manifest.tsv`, `test_image_reference_input/`, `test_fasta_reference_input/`). The reference images are the ProtiCelli repository's `example_cell_reference_input` images (Lundberg lab), split into single-channel files and converted to 8-bit PNG by mapping their normalized [-1, 1] values linearly to 0 to 255. The two FASTA files are different ADK isoforms; both map to the same UniProt entry (P55263), at 100% identity over 362 residues and 99.4% over 343.
 
 ### Weights file
 
@@ -101,7 +87,36 @@ The BLAST database and gene map are packaged with the model weights because they
 
 The weights file is not stored in git. See [Weights builds](#weights-builds) for released versions.
 
-## Running
+## Building the weights file
+
+1. Build the reference zips with `scripts/build_human_blast_db.sh` and `scripts/build_human_gene_map.sh` (usage in each script's header). Both pull from the current UniProt release, so rebuilding later produces different content; keep built zips rather than relying on rebuilding them.
+2. Obtain the ProtiCelli `checkpoint/` and `vae/` folders, for example by running ProtiCelli's `download_checkpoints()`, which fetches them from the Lundberg lab. The build script packages only `checkpoint/unet`, `checkpoint/unet_ema`, and `vae`, and stops if any is missing.
+3. Assemble the weights file:
+
+```bash
+scripts/build_weights_zip.sh proticelli \
+  human_blast_db/human_blast_db.zip \
+  human_gene_map/human_gene_map.zip \
+  blast_proticelli_weights_v2.zip
+```
+
+The script prints the top-level contents and the SHA-256 checksum. Record every build in the table below.
+
+## Weights builds
+
+| Version | Built | UniProt release (date) | ProtiCelli weights | SHA-256 | Location | Notes |
+|---|---|---|---|---|---|---|
+| v1 | 2026-09-28 | 2026_03 (2026-09-02), inferred |  Lundberg lab default `download_checkpoints()` URLs | `19fc815a99449e80eb2c703602aa58a5c92103225efb8203dca738b9cd9c0566` | local only (not yet uploaded) | Verified end to end on two test records. Includes ProtiCelli training state files (about 6.5 GB). UniProt release inferred: reference zips built 2026-09-23, when 2026_03 was current; not recorded by the v1 build scripts. |
+| v2 | 2026-09-28 | 2026_03 (2026-09-02) | Same as v1 | `2f243c8e0945b5b9830fafae1590c92638415501e7aa6c6db71da3161ed07071` | local only (not yet uploaded) | Training state removed, bringing the file to about 3.6 GB. Same model weights and reference zips as v1; outputs match v1 within MPS run-to-run noise. Verified in Docker. |
+
+## Protein search settings
+
+`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, ranks the hits by bit score itself (ties broken by e-value), and walks down the list to the first hit whose gene symbol is in ProtiCelli's vocabulary, matching names the way ProtiCelli does (an exact entry, or a symbol listed inside a combined entry). If none of the 25 qualifies, it searches again with 500, then with every protein in the database (25,000, more than the roughly 20,400 it holds). Each wider search runs only if the previous one came back full. If still nothing is usable, the fallback protein is used. Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. The limits can be changed with `BLAST_EVALUE`, `BLAST_MAX_TARGET_SEQS`, `BLAST_MAX_TARGET_SEQS_RETRY` and `BLAST_MAX_TARGET_SEQS_ALL`.
+
+Results are cached by sequence, so a sequence that appears in many records is searched once per run.
+
+
+## Running inference
 
 ```bash
 python run_inference.py \
@@ -110,28 +125,9 @@ python run_inference.py \
   --output_dir predictions/test_run
 ```
 
-Optional arguments:
 
-| Argument | Default | Purpose |
-|---|---|---|
-| `--fallback_protein` | GAPDH | ProtiCelli protein used when no BLAST hit is usable |
-| `--cell_line` | none | ProtiCelli cell line name applied to every record; omit to run without cell line conditioning |
-| `--seed` | none | Random seed; on Apple GPUs (MPS) results are near-identical, not bit-identical, across runs |
-| `--num_inference_steps` | 50 | Diffusion sampling steps |
-| `--batch_size` | 4 | ProtiCelli prediction batch size |
-| `--weights_dir` | `./weights` | Where model weights are extracted |
-| `--reference_data_dir` | `./reference_data` | Where the BLAST database and gene map are extracted |
-| `--antibody_map` | package copy | Override path to ProtiCelli's vocabulary file |
+### Debuggin in Docker
 
-Weights always extract to `--weights_dir`, never into the installed `proticelli` package. After extracting, a fingerprint of the model weights (each file's name, size and CRC-32, read from the zip's directory in milliseconds) is saved there, so a later run given the same weights file reuses the folder without extracting again (0.1 s rather than about 11 s). A folder holding weights with a different or missing fingerprint stops the run, so each run uses the weights file it was given. Any `LOCAL_BLAST_DB` or `LOCAL_GENE_MAP` environment variables left over from development are ignored for the same reason.
-
-### In Docker
-
-The image holds code only (Python 3.11, BLAST+ 2.17.0, ProtiCelli at the pinned commit, and the pipeline scripts in `/app`); weights and reference data arrive at runtime in the weights file. Build for x86_64, which Terra uses, including on Apple Silicon:
-
-```bash
-docker buildx build --platform linux/amd64 -t blast-proticelli:0.2.0 --load .
-```
 
 The build fails if the ProtiCelli vocabulary files are missing from the installed package, if `blastp` cannot run, or if the pipeline imports fail.
 
@@ -238,44 +234,3 @@ If every record returns `fallback_predictor_error`, the run stops instead, since
 | `cell_line`, `seed`, `num_inference_steps` | Run settings |
 | `run_id` | Short random identifier shared by all rows of one run |
 
-## Building the weights file
-
-1. Build the reference zips with `scripts/build_human_blast_db.sh` and `scripts/build_human_gene_map.sh` (usage in each script's header). Both pull from the current UniProt release, so rebuilding later produces different content; keep built zips rather than relying on rebuilding them.
-2. Obtain the ProtiCelli `checkpoint/` and `vae/` folders, for example by running ProtiCelli's `download_checkpoints()`, which fetches them from the Lundberg lab. The build script packages only `checkpoint/unet`, `checkpoint/unet_ema`, and `vae`, and stops if any is missing.
-3. Assemble the weights file:
-
-```bash
-scripts/build_weights_zip.sh proticelli \
-  human_blast_db/human_blast_db.zip \
-  human_gene_map/human_gene_map.zip \
-  blast_proticelli_weights_v2.zip
-```
-
-The script prints the top-level contents and the SHA-256 checksum. Record every build in the table below.
-
-## Weights builds
-
-| Version | Built | UniProt release (date) | ProtiCelli weights | SHA-256 | Location | Notes |
-|---|---|---|---|---|---|---|
-| v1 | 2026-09-28 | 2026_03 (2026-09-02), inferred |  Lundberg lab default `download_checkpoints()` URLs | `19fc815a99449e80eb2c703602aa58a5c92103225efb8203dca738b9cd9c0566` | local only (not yet uploaded) | Verified end to end on two test records. Includes ProtiCelli training state files (about 6.5 GB). UniProt release inferred: reference zips built 2026-09-23, when 2026_03 was current; not recorded by the v1 build scripts. |
-| v2 | 2026-09-28 | 2026_03 (2026-09-02) | Same as v1 | `2f243c8e0945b5b9830fafae1590c92638415501e7aa6c6db71da3161ed07071` | local only (not yet uploaded) | Training state removed, bringing the file to about 3.6 GB. Same model weights and reference zips as v1; outputs match v1 within MPS run-to-run noise. Verified in Docker. |
-
-## Protein search settings
-
-`protein_predictor.py` runs `blastp` with `-evalue 1000` and `-max_target_seqs 25`, ranks the hits by bit score itself (ties broken by e-value), and walks down the list to the first hit whose gene symbol is in ProtiCelli's vocabulary, matching names the way ProtiCelli does (an exact entry, or a symbol listed inside a combined entry). If none of the 25 qualifies, it searches again with 500, then with every protein in the database (25,000, more than the roughly 20,400 it holds). Each wider search runs only if the previous one came back full. If still nothing is usable, the fallback protein is used. Asking for one target is not the same as asking for the best one: with `-max_target_seqs 1`, BLAST can return the first good hit it finds ([Shah et al. 2019, Bioinformatics 35:1613](https://doi.org/10.1093/bioinformatics/bty833)). Sequences under 30 residues use `-task blastp-short`. The limits can be changed with `BLAST_EVALUE`, `BLAST_MAX_TARGET_SEQS`, `BLAST_MAX_TARGET_SEQS_RETRY` and `BLAST_MAX_TARGET_SEQS_ALL`.
-
-Results are cached by sequence, so a sequence that appears in many records is searched once per run.
-
-## Open items
-
-- **Dim proteins in the output (ask the Lundberg lab).** The protein channel is empty at inference, so its true brightness relative to the nucleus is unknown, and the output assumes it is at least 30% of the nucleus. A dim protein therefore comes back too bright (see [Output intensity](#output-intensity)), which matters for intensity-sensitive metrics and for anyone viewing the images, since a dim protein shown bright reads as highly expressed. The lift is monotone, so the prediction's own brightness could be used to solve back for the true ratio; the Lundberg lab's convention is undocumented.
-- **ProtiCelli release.** Pinned to an upstream commit. Ask the Lundberg lab for a release tag to pin, and record the weights checksums when locking.
-- **ProtiCelli licence.** Upstream added a GPL v3 `LICENSE` file (2026-09-09), but its `pyproject.toml` still says MIT. Confirm which applies.
-- **Vocabulary entries with several symbols.** 463 of the 12,809 vocabulary entries list several symbols (for example a GAGE family entry). A hit on any listed symbol uses that entry, as ProtiCelli itself does; a symbol listed in two equally specific entries is treated as not in the vocabulary.
-- **BLAST settings against the real database.** The new search settings were checked with a stand-in `blastp`; confirm on the two example records (expected: P55263, ADK, for both), and measure `blast_seconds` on real sequences and confirm whether Matthew changed the BLAST step separately.
-- **EMA weights.** ProtiCelli's `Model.model` loads `checkpoint/unet` (`_load_model()` defaults to `use_ema=False`), while its fine-tuning path loads `checkpoint/unet_ema`. EMA weights are commonly the ones used for sampling in diffusion models, so whether inference should use them is a question for the Lundberg lab. Both folders stay in the weights file until then; dropping the unused one would save a further 1.7 GB.
-- **Reproducibility on Apple GPUs.** With a fixed seed, repeated runs on MPS differ by up to about 0.05% of the output range. Whether CUDA runs on Terra are bit-identical is untested.
-- **Fallback protein.** GAPDH (broadly expressed, cytosolic) is an arbitrary default for records with no usable hit; every such record is flagged in the status column. Whether another default suits scoring better is open.
-- **`cell_line`.** Currently a single optional value applied to every record in a run.
-- **GPU driver on Terra.** Upstream ProtiCelli caps PyTorch below 2.9, so the image's PyTorch should now be a CUDA 12.8 build (previously CUDA 13.0, which needs driver 580 or newer). Confirm from the first log line of a Terra run.
-- **Terra.** The workflow has run under miniWDL but not yet on Terra. That needs the Docker image pushed to a registry Terra can pull from, and the weights file and test inputs uploaded to the workspace bucket.

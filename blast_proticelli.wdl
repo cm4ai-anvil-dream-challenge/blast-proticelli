@@ -22,22 +22,12 @@ workflow blast_proticelli {
     input {
         Array[PredictionInput] records
         File weights_file
-        String docker
-        String? cell_line
-        Int? seed
-        Int num_inference_steps = 50
-        Int batch_size = 4
     }
 
     call predict {
         input:
             records = records,
-            weights_file = weights_file,
-            docker = docker,
-            cell_line = cell_line,
-            seed = seed,
-            num_inference_steps = num_inference_steps,
-            batch_size = batch_size
+            weights_file = weights_file
     }
 
     output {
@@ -54,11 +44,7 @@ task predict {
     input {
         Array[PredictionInput] records
         File weights_file
-        String docker
-        String? cell_line
         Int? seed
-        Int num_inference_steps
-        Int batch_size
 
         # Runtime resources, sized for Terra's g2-standard-8 (1x NVIDIA L4).
         Int cpu = 8
@@ -85,9 +71,6 @@ task predict {
             --inputs ~{records_json} \
             --weights_zip ~{weights_file} \
             --output_dir out \
-            --num_inference_steps ~{num_inference_steps} \
-            --batch_size ~{batch_size} \
-            ~{"--cell_line " + cell_line} \
             ~{"--seed " + seed}
     >>>
 
@@ -97,7 +80,7 @@ task predict {
     }
 
     runtime {
-        docker: docker
+        docker: "quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0"
         cpu: cpu
         memory: memory
         disks: "local-disk " + disk_gb + " SSD"

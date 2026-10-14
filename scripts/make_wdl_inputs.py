@@ -33,33 +33,26 @@ def resolve(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--dir", help="Directory containing input files")
-    ap.add_argument("--records", help="JSON from manifest_to_json.py")
+    ap.add_argument("--dir", required=True, help="Directory containing input files")
     ap.add_argument("--weights-file", required=True, help="Weights zip (local path or gs:// URI)")
     ap.add_argument("-o", "--output", default="wdl_inputs.json")
     args = ap.parse_args()
 
-    if args.dir:
-        records = []
-        for faa_path in glob(os.path.join(args.dir, "*.faa")):
-            prediction_id = os.path.basename(faa_path).replace(".faa", "")
+    records = []
+    for faa_path in glob(os.path.join(args.dir, "*.faa")):
+        prediction_id = os.path.basename(faa_path).replace(".faa", "")
 
-            er_path = faa_path.replace(".faa", "_er.png")
-            microtubule_path = faa_path.replace(".faa", "_microtubule.png")
-            nucleus_path = faa_path.replace(".faa", "_nucleus.png")
-            if os.path.exists(er_path) and os.path.exists(microtubule_path) and os.path.exists(nucleus_path):
-                records.append({
-                    "prediction_id": prediction_id,
-                    "microtubules_image": resolve(microtubule_path),
-                    "er_image": resolve(er_path),
-                    "nucleus_image": resolve(nucleus_path),
-                    "fasta_file": resolve(faa_path),
-                })
-    else:
-        with open(args.records) as f:
-            records = json.load(f)
-    if isinstance(records, dict):
-        records = [records]
+        er_path = faa_path.replace(".faa", "_er.png")
+        microtubule_path = faa_path.replace(".faa", "_microtubule.png")
+        nucleus_path = faa_path.replace(".faa", "_nucleus.png")
+        if os.path.exists(er_path) and os.path.exists(microtubule_path) and os.path.exists(nucleus_path):
+            records.append({
+                "prediction_id": prediction_id,
+                "microtubules_image": resolve(microtubule_path),
+                "er_image": resolve(er_path),
+                "nucleus_image": resolve(nucleus_path),
+                "fasta_file": resolve(faa_path),
+            })
 
     inputs = {
         f"{WORKFLOW}.records": records,

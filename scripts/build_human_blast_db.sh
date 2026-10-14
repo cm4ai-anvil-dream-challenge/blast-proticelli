@@ -25,9 +25,10 @@ FASTA="$OUT_DIR/human_reviewed.fasta"
 DB_PREFIX="$OUT_DIR/human_reviewed_swissprot"
 HEADERS="$OUT_DIR/download_headers.txt"
 
+UNIPROT_URL="https://rest.uniprot.org/uniprotkb/stream?compressed=true&format=fasta&query=%28%28proteome%3AUP000005640%29+AND+reviewed%3Dtrue%29"
+
 echo "Downloading reviewed human proteome from UniProt..."
-curl -sS -D "$HEADERS" -o "$FASTA_GZ" \
-  "https://rest.uniprot.org/uniprotkb/stream?query=%28organism_id%3A9606%29%20AND%20%28reviewed%3Atrue%29&format=fasta&compressed=true"
+curl -sS -D "$HEADERS" -o "$FASTA_GZ" "$UNIPROT_URL"
 
 echo "Decompressing..."
 gunzip -f "$FASTA_GZ"
@@ -47,7 +48,7 @@ PROVENANCE_FILE="$OUT_DIR/PROVENANCE.txt"
 {
   echo "Reference database: reviewed human UniProtKB Swiss-Prot BLAST database"
   echo "Generated (UTC): $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  echo "Source query URL: https://rest.uniprot.org/uniprotkb/stream?query=%28organism_id%3A9606%29%20AND%20%28reviewed%3Atrue%29&format=fasta&compressed=true"
+  echo "Source query URL: $UNIPROT_URL"
   echo "Sequences downloaded: $SEQ_COUNT"
   grep -i '^x-uniprot-release' "$HEADERS" | tr -d '\r' || echo "UniProt release: not reported in response headers"
   echo ""

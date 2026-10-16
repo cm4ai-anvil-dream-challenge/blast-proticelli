@@ -114,20 +114,20 @@ def validate_image_files(
 # documented 4-channel spec (channels 0, 2, 3) with the ignored protein
 # channel (1) dropped. Also the order split_reference_channels.py already
 # writes its output in.
-CHANNEL_ORDER = ("microtubule", "nucleus", "er")
+CHANNEL_ORDER = ("microtubules", "nucleus", "er")
 
 
 def assemble_channels(channel_paths, channel_axis=-1):
     """
     Load three single-channel image files and stack them into one
-    multi-channel array, in CHANNEL_ORDER (microtubule, nucleus, er).
-    channel_paths must be given in that order: [microtubule_path,
+    multi-channel array, in CHANNEL_ORDER (microtubules, nucleus, er).
+    channel_paths must be given in that order: [microtubules_path,
     nucleus_path, er_path]. Raises if the three loaded images don't all
     share the same H/W shape, rather than deferring to a less legible
     error from np.stack itself.
     """
     if len(channel_paths) != 3:
-        raise ValueError(f"Expected exactly 3 channel paths (microtubule, nucleus, er), got {len(channel_paths)}")
+        raise ValueError(f"Expected exactly 3 channel paths (microtubules, nucleus, er), got {len(channel_paths)}")
 
     channels = [imread(p) for p in channel_paths]
     shapes = {c.shape for c in channels}
@@ -193,7 +193,7 @@ def validate_channel_files(
 
 def validate_manifest_channel_images(
     manifest,
-    microtubule_col,
+    microtubules_col,
     nucleus_col,
     er_col,
     id_col="cell_id",
@@ -205,7 +205,7 @@ def validate_manifest_channel_images(
 ):
     """
     Manifest-driven counterpart to validate_image_files: for each row,
-    reassemble the three channel files named in microtubule_col /
+    reassemble the three channel files named in microtubules_col /
     nucleus_col / er_col into one multi-channel image, validate it with
     the exact same core the single-file path uses, and return
     (passing_images, report_df) in the same shape validate_image_files
@@ -229,7 +229,7 @@ def validate_manifest_channel_images(
     if expected_hw is None or expected_dtype is None:
         first = manifest.iloc[0]
         probe = assemble_channels(
-            [first[microtubule_col], first[nucleus_col], first[er_col]], channel_axis=axis
+            [first[microtubules_col], first[nucleus_col], first[er_col]], channel_axis=axis
         )
         if expected_hw is None:
             expected_hw = tuple(s for i, s in enumerate(probe.shape) if i != (axis % probe.ndim))
@@ -237,7 +237,7 @@ def validate_manifest_channel_images(
             expected_dtype = probe.dtype
 
     for _, row in manifest.iterrows():
-        channel_paths = [row[microtubule_col], row[nucleus_col], row[er_col]]
+        channel_paths = [row[microtubules_col], row[nucleus_col], row[er_col]]
         report_id = row[id_col]
 
         _, id_consistent = check_id_prefix_consistency(channel_paths)

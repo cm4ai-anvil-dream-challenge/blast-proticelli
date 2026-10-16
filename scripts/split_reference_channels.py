@@ -2,7 +2,7 @@
 """
 split_reference_channels.py
 
-Splits a single multi-channel reference TIFF (channel order: microtubule,
+Splits a single multi-channel reference TIFF (channel order: microtubules,
 nucleus, ER, per the source data) into three separate single-channel TIFF
 files, matching the manifest's microtubules_image / nucleus_image /
 er_image columns. Output is TIFF, not PNG, since that's ProtiCelli's
@@ -13,7 +13,7 @@ output extension/writer needs to change, not the channel-splitting logic.
 Assumptions (stated explicitly since this has not been run against a
 real ProtiCelli reference image, only a synthetic test fixture):
   - The TIFF holds exactly 3 channels/pages, in the stated order
-    (microtubule, nucleus, ER).
+    (microtubules, nucleus, ER).
   - Channels may be stored as the first axis (shape (3, H, W), typical
     for a multi-page TIFF read as a stack) or the last axis (shape
     (H, W, 3), typical for an RGB-style image). Both are handled; any

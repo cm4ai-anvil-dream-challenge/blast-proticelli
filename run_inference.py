@@ -19,7 +19,7 @@ prediction; its fields are copied into the results table for our own checks.
 Malformed inputs fail loudly rather than being validated and filtered here.
 
 Everything the model needs at runtime ships in one weights zip
-(--weights_zip), built with scripts/build_weights_zip.sh:
+(--weights_zip), built with training/build_weights_zip.sh (or the training notebook):
     blast_proticelli_weights.zip
         checkpoint/unet/                ProtiCelli model weights (loaded for inference)
         checkpoint/unet_ema/            ProtiCelli EMA weights (not loaded, not extracted)
@@ -296,11 +296,15 @@ HEADER_FIELDS = {
 def header_columns(fasta_path):
     header = pp.read_fasta_header(fasta_path)
     fields = pp.parse_header_fields(header)
-    return {
+    columns = {
         "fasta_record_count": pp.count_fasta_records(fasta_path),
         "fasta_header": header,
         **{col: fields.get(key, "") for col, key in HEADER_FIELDS.items()},
     }
+    gene = pp.header_gene_lookup(fields.get("ensembl_protein_id", ""))
+    columns["fasta_hgnc_symbol"] = gene["hgnc_symbol"] or ""
+    columns["fasta_hgnc_source"] = gene["source"]
+    return columns
 
 
 def write_results(rows, path):

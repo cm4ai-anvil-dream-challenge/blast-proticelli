@@ -56,3 +56,5 @@ tl_sandbox.ipynb
 
 # Old version of code - backup prior to a sig update
 pipeline_checks_v1.py
+# Training notebook working folder (downloads, data copies, checkpoints, built weights)
+training/work/

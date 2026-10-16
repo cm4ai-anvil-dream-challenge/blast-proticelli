@@ -523,6 +523,68 @@ def local_gene_lookup(accession: str) -> dict:
     }
 
 
+_LOCAL_ENSP_INDEX = None  # Ensembl protein id -> HGNC symbols, lazy-loaded once
+
+# fasta_hgnc_source values, for the HGNC symbol named by a FASTA header.
+HEADER_GENE_RESOLVED = "uniprot_ensembl_xref"
+HEADER_GENE_NOT_FOUND = "not_in_gene_map"
+HEADER_GENE_AMBIGUOUS = "ambiguous_in_gene_map"
+HEADER_GENE_NO_COLUMN = "gene_map_has_no_protein_ids"
+HEADER_GENE_NO_ID = "no_ensembl_protein_id_in_header"
+
+
+def _load_ensp_index(path: str):
+    """
+    Ensembl protein id -> set of HGNC symbols, from the gene map's fourth
+    column (ensembl_protein_ids). Returns None when the gene map predates
+    that column (the v1 and v2 weights files).
+    """
+    global _LOCAL_ENSP_INDEX
+    if _LOCAL_ENSP_INDEX is not None:
+        return _LOCAL_ENSP_INDEX or None
+
+    index = {}
+    with open(path) as f:
+        header = next(f, "").rstrip("\n").split("\t")
+        if "ensembl_protein_ids" not in header:
+            _LOCAL_ENSP_INDEX = {}
+            return None
+        col = header.index("ensembl_protein_ids")
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) <= col or not parts[1]:
+                continue
+            for ensp in filter(None, parts[col].split(";")):
+                index.setdefault(ensp, set()).add(parts[1])
+
+    _LOCAL_ENSP_INDEX = index
+    return index
+
+
+def header_gene_lookup(ensembl_protein_id: str) -> dict:
+    """
+    The HGNC symbol for the Ensembl protein id in a FASTA header, from
+    UniProt's Ensembl cross-references in the local gene map. Reporting
+    only: the prediction never uses the header.
+
+    Header ids come from a fixed Ensembl release (109 in the 2026-10
+    sample set), while the gene map follows the current UniProt release,
+    so a retired or renumbered id is reported as not found rather than
+    guessed.
+    """
+    if not ensembl_protein_id:
+        return {"hgnc_symbol": None, "source": HEADER_GENE_NO_ID}
+    index = _load_ensp_index(LOCAL_GENE_MAP) if LOCAL_GENE_MAP else None
+    if index is None:
+        return {"hgnc_symbol": None, "source": HEADER_GENE_NO_COLUMN}
+    symbols = sorted(index.get(ensembl_protein_id.split(".")[0], ()))
+    if not symbols:
+        return {"hgnc_symbol": None, "source": HEADER_GENE_NOT_FOUND}
+    if len(symbols) > 1:
+        return {"hgnc_symbol": ";".join(symbols), "source": HEADER_GENE_AMBIGUOUS}
+    return {"hgnc_symbol": symbols[0], "source": HEADER_GENE_RESOLVED}
+
+
 # ---- FASTA parsing ---------------------------------------------------------
 
 def count_fasta_records(path) -> int:

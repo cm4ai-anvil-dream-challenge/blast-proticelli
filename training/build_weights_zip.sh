@@ -4,7 +4,7 @@
 # Layout produced:
 #   <out_zip>
 #       checkpoint/unet/                ProtiCelli model weights (loaded for inference)
-#       checkpoint/unet_ema/            ProtiCelli EMA weights (kept pending use_ema question)
+#       checkpoint/unet_ema/            ProtiCelli EMA weights, if present (not loaded by inference)
 #       vae/                            ProtiCelli VAE weights
 #       reference/human_blast_db.zip    from build_human_blast_db.sh
 #       reference/human_gene_map.zip    from build_human_gene_map.sh
@@ -34,10 +34,19 @@ BLAST_DB_ZIP=$2
 GENE_MAP_ZIP=$3
 OUT_ZIP=$(cd "$(dirname "$4")" && pwd)/$(basename "$4")
 
-INCLUDE=(checkpoint/unet checkpoint/unet_ema vae)
+# checkpoint/unet and vae are what inference loads. checkpoint/unet_ema is
+# packaged when present (the published ProtiCelli weights have it) and
+# skipped otherwise (the training notebook writes its fine-tuned weights to
+# checkpoint/unet only).
+REQUIRED=(checkpoint/unet vae)
+OPTIONAL=(checkpoint/unet_ema)
 
-for d in "${INCLUDE[@]}"; do
+for d in "${REQUIRED[@]}"; do
     [[ -d "$PROTICELLI_DIR/$d" ]] || { echo "ERROR: $PROTICELLI_DIR/$d not found" >&2; exit 1; }
+done
+INCLUDE=("${REQUIRED[@]}")
+for d in "${OPTIONAL[@]}"; do
+    [[ -d "$PROTICELLI_DIR/$d" ]] && INCLUDE+=("$d")
 done
 for f in "$BLAST_DB_ZIP" "$GENE_MAP_ZIP"; do
     [[ -f "$f" ]] || { echo "ERROR: $f not found" >&2; exit 1; }
@@ -56,4 +65,4 @@ cp "$GENE_MAP_ZIP" "$STAGE/reference/human_gene_map.zip"
 
 echo "Wrote $OUT_ZIP"
 unzip -l "$OUT_ZIP" | awk 'NR>3 && $4 ~ /^(checkpoint\/[^\/]+|vae|reference)\/[^\/]*\/?$/ {printf "  %12s  %s\n", $1, $4}'
-shasum -a 256 "$OUT_ZIP"
+if command -v sha256sum >/dev/null; then sha256sum "$OUT_ZIP"; else shasum -a 256 "$OUT_ZIP"; fi

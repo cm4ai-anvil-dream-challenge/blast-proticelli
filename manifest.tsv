@@ -1,0 +1,3 @@
+prediction_id	microtubules_image	nucleus_image	er_image	aa_sequence_fasta_path
+cell_0	test_inputs/cell_0_microtubules.png	test_inputs/cell_0_nucleus.png	test_inputs/cell_0_er.png	test_inputs/cell_0.faa
+cell_1	test_inputs/cell_1_microtubules.png	test_inputs/cell_1_nucleus.png	test_inputs/cell_1_er.png	test_inputs/cell_1.faa

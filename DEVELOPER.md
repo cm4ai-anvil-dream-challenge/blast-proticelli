@@ -46,4 +46,4 @@ This repository holds only the baseline wrapper. ProtiCelli itself, developed by
 | `scripts/split_reference_channels.py` | Splits a multichannel reference TIFF into single-channel TIFFs (earlier test data preparation) |
 | `blast_proticelli.wdl` | WDL workflow wrapping `run_inference.py` for Terra or miniWDL |
 | `scripts/make_wdl_inputs.py` | Builds the WDL inputs JSON from the input records |
-| `manifest.tsv`, `test_image_reference_input/`, `test_fasta_reference_input/` | Two-record example: manifest, split reference images, and FASTA files |
+| `manifest.tsv`, `test_inputs/` | Two-record example: a manifest with paths relative to the repository, and its reference images and FASTA files |

@@ -51,7 +51,7 @@ import requests
 
 # ---- Config --------------------------------------------------------------
 
-EBI_EMAIL = os.environ.get("EBI_EMAIL", "lusardi@ohsu.edu")
+EBI_EMAIL = os.environ.get("EBI_EMAIL", "")  # your own address; EBI requires one per job
 EBI_BASE = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast"
 EBI_DATABASE = os.environ.get("EBI_DATABASE", "uniprotkb_swissprot")
 ORGANISM_FILTER = os.environ.get("ORGANISM_FILTER", "Homo sapiens")
@@ -213,6 +213,8 @@ def save_cache(seq: str, result: dict, extra: str = ""):
 # ---- Step 1: EBI BLAST, sequence to UniProt accession --------------------
 
 def submit_blast(seq: str) -> str:
+    if not EBI_EMAIL:
+        raise ValueError("SEARCH_BACKEND=ebi needs your email address in the EBI_EMAIL environment variable (EBI's usage policy)")
     resp = requests.post(
         f"{EBI_BASE}/run",
         data={

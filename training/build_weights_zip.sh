@@ -10,7 +10,7 @@
 #       reference/human_gene_map.zip    from build_human_gene_map.sh
 #
 # Usage:
-#   scripts/build_weights_zip.sh <proticelli_dir> <blast_db_zip> <gene_map_zip> <out_zip>
+#   training/build_weights_zip.sh <proticelli_dir> <blast_db_zip> <gene_map_zip> <out_zip>
 #
 # <proticelli_dir> is the directory holding the extracted checkpoint/ and vae/
 # folders (the proticelli package directory after download_checkpoints()).

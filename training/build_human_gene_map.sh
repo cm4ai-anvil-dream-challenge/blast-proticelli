@@ -101,4 +101,4 @@ ZIP_FILE="$OUT_DIR/human_gene_map.zip"
 echo "Wrote $ZIP_FILE"
 
 echo ""
-echo "Done. Package $ZIP_FILE into the weights file with scripts/build_weights_zip.sh."
+echo "Done. Package $ZIP_FILE into the weights file with training/build_weights_zip.sh."

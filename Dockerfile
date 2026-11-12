@@ -5,7 +5,7 @@
 #
 # Build (--platform is required on an Apple Silicon Mac: Terra runs x86_64.
 # Omitting it fails at the blastp check below, since BLAST is x86_64 only):
-#   docker buildx build --platform linux/amd64 -t blast-proticelli:0.2.0 --load .
+#   docker buildx build --platform linux/amd64 -t blast-proticelli:0.3.0 --load .
 #
 # Run: see README.md. The WDL task calls
 #   python /app/run_inference.py --inputs ... --weights_zip ... --output_dir ...
@@ -44,6 +44,7 @@ RUN python -c "from importlib import resources; d = resources.files('proticelli'
 missing = [f for f in ('antibody_map.pkl', 'cell_line_map.pkl') if not (d / f).is_file()]; \
 assert not missing, f'missing from installed package: {missing}'; print('package data OK')" \
  && blastp -version \
+ && tar --version | head -1 \
  && python -c "import sys; sys.path.insert(0, '/app'); import run_inference; print('imports OK')"
 
 ENV PYTHONUNBUFFERED=1 \

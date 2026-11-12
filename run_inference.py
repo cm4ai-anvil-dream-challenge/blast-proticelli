@@ -30,6 +30,9 @@ Everything the model needs at runtime ships in one weights zip
 Outputs, all written flat into --output_dir:
     {prediction_id}.png        one per record that could be predicted (8-bit, 0 to 255)
     prediction_results.tsv     one row per input record, predicted or not
+                               (written elsewhere with --results_tsv; the
+                               submission WDL keeps it out of predictions/)
+The log also carries one line per record: best BLAST hit, protein used, status.
 
 Optional arguments:
 
@@ -37,6 +40,7 @@ Optional arguments:
 |---|---|---|
 | `--fallback_protein` | GAPDH | ProtiCelli protein used when no BLAST hit is usable |
 | `--cell_line` | none | ProtiCelli cell line name applied to every record; omit to run without cell line conditioning |
+| `--results_tsv` | `<output_dir>/prediction_results.tsv` | Where the results table is written |
 | `--seed` | none | Random seed; on Apple GPUs (MPS) results are near-identical, not bit-identical, across runs |
 | `--num_inference_steps` | 50 | Diffusion sampling steps |
 | `--batch_size` | 4 | ProtiCelli prediction batch size |
@@ -139,6 +143,8 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--results_tsv", default=None,
+                        help="Results table path. Default: prediction_results.tsv in --output_dir")
     return parser.parse_args()
 
 
@@ -375,7 +381,7 @@ def main():
         results_rows.append(row)
         to_predict.append((rec, protein_key, row))
 
-    results_path = output_dir / "prediction_results.tsv"
+    results_path = Path(args.results_tsv) if args.results_tsv else output_dir / "prediction_results.tsv"
 
     # Every record failing inside the predictor points at the environment
     # (missing blastp, bad reference zip), not at the data. Fail the run.

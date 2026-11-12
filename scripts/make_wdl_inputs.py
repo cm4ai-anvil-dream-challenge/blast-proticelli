@@ -21,6 +21,12 @@ Usage:
         --dir test_inputs \
         --weights-file blast_proticelli_weights_v2.zip \
         -o wdl_inputs.json
+
+--uri-prefix gs://BUCKET/path writes each input file as that prefix plus its
+file name, for a run on AnVIL once the folder's files are copied there.
+
+--wdl submission_test writes inputs for submission_test.wdl (the AnVIL test
+of submission.wdl) instead of blast_proticelli.wdl (the default).
 """
 
 import argparse
@@ -29,7 +35,11 @@ import os
 import sys
 from glob import glob
 
-WORKFLOW = "blast_proticelli"
+# Input names for each WDL: (records array, weights file).
+INPUT_NAMES = {
+    "blast_proticelli": ("records", "weights_file"),
+    "submission_test": ("inputs", "weights"),
+}
 
 
 def resolve(path):
@@ -42,6 +52,10 @@ def main():
     ap.add_argument("--dir", required=True, help="Directory containing input files")
     ap.add_argument("--weights-file", required=True, help="Weights zip (local path or gs:// URI)")
     ap.add_argument("-o", "--output", default="wdl_inputs.json")
+    ap.add_argument("--wdl", choices=sorted(INPUT_NAMES), default="blast_proticelli",
+                    help="Which WDL the inputs are for (default: blast_proticelli)")
+    ap.add_argument("--uri-prefix", default=None,
+                    help="Write input files as PREFIX/<file name> (e.g. gs://bucket/test_cells) instead of local paths")
     args = ap.parse_args()
 
     records = []
@@ -57,10 +71,15 @@ def main():
         if missing:
             incomplete.append((prediction_id, missing))
             continue
+        def locate(path):
+            if args.uri_prefix:
+                return args.uri_prefix.rstrip("/") + "/" + os.path.basename(path)
+            return resolve(path)
+
         records.append({
             "prediction_id": prediction_id,
-            **{key: resolve(path) for key, path in images.items()},
-            "fasta_file": resolve(faa_path),
+            **{key: locate(path) for key, path in images.items()},
+            "fasta_file": locate(faa_path),
         })
 
     if incomplete:
@@ -70,12 +89,14 @@ def main():
     if not records:
         sys.exit(f"ERROR: no complete records in {args.dir}")
 
+    records_name, weights_name = INPUT_NAMES[args.wdl]
+    weights_file = resolve(args.weights_file)
     inputs = {
-        f"{WORKFLOW}.records": records,
-        f"{WORKFLOW}.weights_file": resolve(args.weights_file)
+        f"{args.wdl}.{records_name}": records,
+        f"{args.wdl}.{weights_name}": weights_file,
     }
 
-    missing = [p for p in [inputs[f"{WORKFLOW}.weights_file"]] if "://" not in p and not os.path.isfile(p)]
+    missing = [p for p in [weights_file] if "://" not in p and not os.path.isfile(p)]
     if missing:
         sys.exit(f"ERROR: weights file not found: {missing[0]}")
 

@@ -9,6 +9,10 @@ version 1.0
 #
 # Everything the model needs at runtime (ProtiCelli weights, BLAST database,
 # gene map) arrives in `weights_file`. See README.md for its layout.
+#
+# This is the development WDL: the image is an input, the results table is an
+# output, and resources can be set. The challenge accepts a stricter form;
+# submission.wdl runs the same command under the submission contract.
 
 struct PredictionInput {
     String prediction_id
@@ -16,18 +20,21 @@ struct PredictionInput {
     File er_image
     File nucleus_image
     File fasta_file
+    File? mask_image
 }
 
 workflow blast_proticelli {
     input {
         Array[PredictionInput] records
         File weights_file
+        String docker = "quay.io/ohsu-comp-bio/blast-proticelli-example:v0.3.0"
     }
 
     call predict {
         input:
             records = records,
-            weights_file = weights_file
+            weights_file = weights_file,
+            docker = docker
     }
 
     output {
@@ -44,6 +51,7 @@ task predict {
     input {
         Array[PredictionInput] records
         File weights_file
+        String docker
         Int? seed
 
         # Runtime resources, sized for Terra's g2-standard-8 (1x NVIDIA L4).
@@ -54,10 +62,6 @@ task predict {
         String gpu_type = "nvidia-l4"
     }
 
-    # write_json runs after localization, so the paths inside it point at
-    # the task's local copies of each file, not the original gs:// URIs.
-    File records_json = write_json(records)
-
     command <<<
         set -euo pipefail
 
@@ -67,8 +71,10 @@ task predict {
         nvidia-smi || echo "nvidia-smi not available"
         python -c "import torch; print('torch', torch.__version__, '| CUDA build', torch.version.cuda, '| CUDA available', torch.cuda.is_available())" || true
 
+        # write_json in the command runs after localization, so the paths
+        # inside it point at the task's local copies, not gs:// URIs.
         python /app/run_inference.py \
-            --inputs ~{records_json} \
+            --inputs "~{write_json(records)}" \
             --weights_zip ~{weights_file} \
             --output_dir out \
             ~{"--seed " + seed}
@@ -80,7 +86,7 @@ task predict {
     }
 
     runtime {
-        docker: "quay.io/ohsu-comp-bio/blast-proticelli-example:v0.2.0"
+        docker: docker
         cpu: cpu
         memory: memory
         disks: "local-disk " + disk_gb + " SSD"

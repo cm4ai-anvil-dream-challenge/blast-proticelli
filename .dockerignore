@@ -37,3 +37,5 @@ example_cell_reference_input/
 test_*/
 *.ipynb
 inputs.json
+# Training notebook work folder (downloads, fine-tuned weights, run outputs)
+training/work/

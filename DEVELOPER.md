@@ -40,10 +40,10 @@ This repository holds only the baseline wrapper. ProtiCelli itself, developed by
 | `image_scaling.py` | PNG input, normalization with ProtiCelli's `ImageNormalizer`, and output rescaling to 0 to 255 |
 | `pipeline_checks.py` | Optional input validation helpers (not called by `run_inference.py`) |
 | `scripts/manifest_to_json.py` | Converts a manifest TSV into the input JSON |
-| `scripts/build_human_blast_db.sh` | Builds the reference BLAST database zip |
-| `scripts/build_human_gene_map.sh` | Builds the reference gene map zip |
-| `scripts/build_weights_zip.sh` | Assembles the weights file from the model weights and reference zips |
+| `training/build_human_blast_db.sh` | Builds the reference BLAST database zip |
+| `training/build_human_gene_map.sh` | Builds the reference gene map zip |
+| `training/build_weights_zip.sh` | Assembles the weights file from the model weights and reference zips |
 | `scripts/split_reference_channels.py` | Splits a multichannel reference TIFF into single-channel TIFFs (earlier test data preparation) |
 | `blast_proticelli.wdl` | WDL workflow wrapping `run_inference.py` for Terra or miniWDL |
 | `scripts/make_wdl_inputs.py` | Builds the WDL inputs JSON from the input records |
-| `manifest.tsv`, `test_image_reference_input/`, `test_fasta_reference_input/` | Two-record example: manifest, split reference images, and FASTA files |
+| `manifest.tsv`, `test_inputs/` | Two-record example: a manifest with paths relative to the repository, and its reference images and FASTA files |

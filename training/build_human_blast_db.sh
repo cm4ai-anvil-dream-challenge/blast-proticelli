@@ -25,10 +25,19 @@ FASTA="$OUT_DIR/human_reviewed.fasta"
 DB_PREFIX="$OUT_DIR/human_reviewed_swissprot"
 HEADERS="$OUT_DIR/download_headers.txt"
 
-UNIPROT_URL="https://rest.uniprot.org/uniprotkb/stream?compressed=true&format=fasta&query=%28%28proteome%3AUP000005640%29+AND+reviewed%3Dtrue%29"
+# Same query as build_human_gene_map.sh, so both cover the same entries.
+UNIPROT_URL="https://rest.uniprot.org/uniprotkb/stream?query=%28organism_id%3A9606%29%20AND%20%28reviewed%3Atrue%29&format=fasta&compressed=true"
 
 echo "Downloading reviewed human proteome from UniProt..."
-curl -sS -D "$HEADERS" -o "$FASTA_GZ" "$UNIPROT_URL"
+# -f: an HTTP error (for example a rejected query) fails here instead of saving
+# the error page as if it were data. --retry: transient network failures.
+curl -fsS --retry 5 --retry-delay 15 --retry-all-errors -D "$HEADERS" -o "$FASTA_GZ" "$UNIPROT_URL"
+
+if ! gzip -t "$FASTA_GZ" 2>/dev/null; then
+  echo "ERROR: download is not a complete gzip file (interrupted, or UniProt returned an error page)." >&2
+  echo "Check the network connection and rerun; response headers are in $HEADERS" >&2
+  exit 1
+fi
 
 echo "Decompressing..."
 gunzip -f "$FASTA_GZ"
@@ -37,8 +46,9 @@ SEQ_COUNT=$(grep -c "^>" "$FASTA" || true)
 echo "Downloaded $SEQ_COUNT sequences to $FASTA"
 
 if [ "$SEQ_COUNT" -lt 1000 ]; then
-  echo "WARNING: expected roughly 20000 reviewed human sequences, got $SEQ_COUNT." >&2
-  echo "This usually means the query string needs adjusting, check the file contents before proceeding." >&2
+  echo "ERROR: expected roughly 20000 reviewed human sequences, got $SEQ_COUNT." >&2
+  echo "This usually means the query string needs adjusting; check $FASTA." >&2
+  exit 1
 fi
 
 echo "Building blastp database at $DB_PREFIX ..."
@@ -65,4 +75,4 @@ ZIP_FILE="$OUT_DIR/human_blast_db.zip"
 echo "Wrote $ZIP_FILE"
 
 echo ""
-echo "Done. Package $ZIP_FILE into the weights file with scripts/build_weights_zip.sh."
+echo "Done. Package $ZIP_FILE into the weights file with training/build_weights_zip.sh."

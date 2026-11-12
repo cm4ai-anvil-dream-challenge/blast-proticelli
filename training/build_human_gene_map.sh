@@ -29,8 +29,16 @@ MAP_TSV="$OUT_DIR/human_gene_map.tsv"
 HEADERS="$OUT_DIR/download_headers.txt"
 
 echo "Downloading reviewed human UniProt accession -> symbol -> Ensembl cross-references..."
-curl -sS -D "$HEADERS" -o "$RAW_TSV_GZ" \
+# -f: an HTTP error (for example a rejected query) fails here instead of saving
+# the error page as if it were data. --retry: transient network failures.
+curl -fsS --retry 5 --retry-delay 15 --retry-all-errors -D "$HEADERS" -o "$RAW_TSV_GZ" \
   "https://rest.uniprot.org/uniprotkb/stream?query=%28organism_id%3A9606%29%20AND%20%28reviewed%3Atrue%29&fields=accession%2Cgene_primary%2Cxref_ensembl_full&format=tsv&compressed=true"
+
+if ! gzip -t "$RAW_TSV_GZ" 2>/dev/null; then
+  echo "ERROR: download is not a complete gzip file (interrupted, or UniProt returned an error page)." >&2
+  echo "Check the network connection and rerun; response headers are in $HEADERS" >&2
+  exit 1
+fi
 
 echo "Decompressing..."
 gunzip -f "$RAW_TSV_GZ"
@@ -39,8 +47,9 @@ ROW_COUNT=$(($(wc -l < "$RAW_TSV") - 1))
 echo "Downloaded $ROW_COUNT accession rows to $RAW_TSV"
 
 if [ "$ROW_COUNT" -lt 1000 ]; then
-  echo "WARNING: expected roughly 20000 rows (same ballpark as the BLAST db build), got $ROW_COUNT." >&2
-  echo "This usually means the query or fields string needs adjusting, check the file contents before proceeding." >&2
+  echo "ERROR: expected roughly 20000 rows (same ballpark as the BLAST db build), got $ROW_COUNT." >&2
+  echo "This usually means the query or fields string needs adjusting; check $RAW_TSV." >&2
+  exit 1
 fi
 
 echo "Building compact accession -> symbol -> Ensembl gene id map at $MAP_TSV ..."
@@ -55,7 +64,7 @@ with open(raw_path, newline="") as fin, open(map_path, "w", newline="") as fout:
     reader = csv.reader(fin, delimiter="\t")
     writer = csv.writer(fout, delimiter="\t")
     next(reader, None)  # header, whatever UniProt actually names these columns
-    writer.writerow(["accession", "hgnc_symbol", "ensembl_gene_ids"])
+    writer.writerow(["accession", "hgnc_symbol", "ensembl_gene_ids", "ensembl_protein_ids"])
 
     rows_with_gene = 0
     for row in reader:
@@ -66,16 +75,20 @@ with open(raw_path, newline="") as fin, open(map_path, "w", newline="") as fout:
         # punctuation, robust to formatting details this script's author
         # couldn't verify against a live response.
         gene_ids = sorted(set(re.findall(r"ENSG\d+", ensembl_blob)))
+        # Ensembl protein ids (version suffixes dropped), so the ENSP in a
+        # challenge FASTA header can be named with an HGNC symbol for
+        # reporting. Inference reads only the first three columns.
+        protein_ids = sorted(set(re.findall(r"ENSP\d+", ensembl_blob)))
         if gene_ids:
             rows_with_gene += 1
-        writer.writerow([accession, symbol.strip(), ";".join(gene_ids)])
+        writer.writerow([accession, symbol.strip(), ";".join(gene_ids), ";".join(protein_ids)])
 
     print(f"  {rows_with_gene} of the parsed rows had at least one ENSG id extracted")
 PYEOF
 
 PROVENANCE_FILE="$OUT_DIR/PROVENANCE.txt"
 {
-  echo "Reference data: reviewed human UniProt accession -> symbol -> Ensembl gene id map"
+  echo "Reference data: reviewed human UniProt accession -> symbol -> Ensembl gene and protein id map"
   echo "Generated (UTC): $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "Source query URL: https://rest.uniprot.org/uniprotkb/stream?query=%28organism_id%3A9606%29%20AND%20%28reviewed%3Atrue%29&fields=accession%2Cgene_primary%2Cxref_ensembl_full&format=tsv&compressed=true"
   echo "Accession rows downloaded: $ROW_COUNT"
@@ -88,4 +101,4 @@ ZIP_FILE="$OUT_DIR/human_gene_map.zip"
 echo "Wrote $ZIP_FILE"
 
 echo ""
-echo "Done. Package $ZIP_FILE into the weights file with scripts/build_weights_zip.sh."
+echo "Done. Package $ZIP_FILE into the weights file with training/build_weights_zip.sh."

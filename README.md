@@ -89,12 +89,12 @@ The weights file is not stored in git. See [Weights builds](#weights-builds) for
 
 ## Building the weights file
 
-1. Build the reference zips with `scripts/build_human_blast_db.sh` and `scripts/build_human_gene_map.sh` (usage in each script's header). Both pull from the current UniProt release, so rebuilding later produces different content; keep built zips rather than relying on rebuilding them.
+1. Build the reference zips with `training/build_human_blast_db.sh` and `training/build_human_gene_map.sh` (usage in each script's header). Both pull from the current UniProt release, so rebuilding later produces different content; keep built zips rather than relying on rebuilding them.
 2. Obtain the ProtiCelli `checkpoint/` and `vae/` folders, for example by running ProtiCelli's `download_checkpoints()`, which fetches them from the Lundberg lab. The build script packages only `checkpoint/unet`, `checkpoint/unet_ema`, and `vae`, and stops if any is missing.
 3. Assemble the weights file:
 
 ```bash
-scripts/build_weights_zip.sh proticelli \
+training/build_weights_zip.sh proticelli \
   human_blast_db/human_blast_db.zip \
   human_gene_map/human_gene_map.zip \
   blast_proticelli_weights_v2.zip
@@ -126,7 +126,7 @@ python run_inference.py \
 ```
 
 
-### Debuggin in Docker
+### Debugging in Docker
 
 
 The build fails if the ProtiCelli vocabulary files are missing from the installed package, if `blastp` cannot run, or if the pipeline imports fail.
@@ -207,6 +207,8 @@ If every record returns `fallback_predictor_error`, the run stops instead, since
 
 ### Results columns
 
+Gene symbols come from three places, and the column names say which: `predicted_*` and `best_hit_*` are BLAST hits named by the UniProt gene map in the weights file; `model_protein_key` and `protein_passed_to_model` are entries in ProtiCelli's own vocabulary (`antibody_map.pkl`); `fasta_hgnc_symbol` is the protein the FASTA header names, looked up in the same UniProt gene map.
+
 | Column | Content |
 |---|---|
 | `prediction_id` | From the input record |
@@ -214,7 +216,7 @@ If every record returns `fallback_predictor_error`, the run stops instead, since
 | `output_file` | Image filename |
 | `protein_passed_to_model` | What ProtiCelli was asked to predict: the hit's vocabulary entry, or the fallback protein |
 | `predicted_uniprot_accession`, `predicted_ensembl_gene_id`, `predicted_hgnc_symbol` | The hit used: the highest-ranked hit in ProtiCelli's vocabulary |
-| `model_protein_key` | The vocabulary entry passed to ProtiCelli (an entry can list several symbols) |
+| `model_protein_key` | ProtiCelli vocabulary entry for the hit used, from `antibody_map.pkl` (an entry can list several symbols, for example `PLG,PLGLB1,PLGLB2`) |
 | `predicted_hit_rank` | Rank of the hit used among all hits (1 means the best hit overall was usable) |
 | `percent_identity`, `e_value`, `alignment_length`, `bit_score` | Statistics for the hit used |
 | `best_hit_uniprot_accession`, `best_hit_hgnc_symbol`, `best_hit_percent_identity`, `best_hit_e_value`, `best_hit_bit_score` | The best hit overall, in the vocabulary or not |
@@ -227,6 +229,8 @@ If every record returns `fallback_predictor_error`, the run stops instead, since
 | `predictor_error` | Error message, if any |
 | `fasta_record_count` | Sequences in the FASTA file; only the first is used |
 | `fasta_header`, `fasta_hpa_antibody_id`, `fasta_ensembl_protein_id`, `fasta_ensembl_release` | From the first FASTA header, reporting only |
+| `fasta_hgnc_symbol` | HGNC symbol for `fasta_ensembl_protein_id`, from UniProt's Ensembl cross-references in the gene map (reporting only; compare with `best_hit_hgnc_symbol`) |
+| `fasta_hgnc_source` | How `fasta_hgnc_symbol` was found: `uniprot_ensembl_xref`; or why it is blank: `not_in_gene_map` (the header's Ensembl release has an id the current UniProt release no longer lists), `ambiguous_in_gene_map` (several symbols, all listed), `gene_map_has_no_protein_ids` (weights files v1 and v2), `no_ensembl_protein_id_in_header` |
 | `nucleus_max` | Nucleus maximum in counts, the output scale (predicted records only) |
 | `gain_microtubules`, `gain_nucleus`, `gain_er` | `ImageNormalizer` gain per reference channel |
 | `prediction_max` | Brightest decoded prediction value (0 to 1.3) |

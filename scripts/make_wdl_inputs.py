@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Build a WDL inputs file for blast_proticelli.wdl.
+"""Build a WDL inputs file for blast_proticelli.wdl from a folder of input files.
 
-Wraps the records produced by manifest_to_json.py together with the
-weights file, Docker image, and optional run settings, using the
-"<workflow>.<input>" keys that miniWDL and Terra expect.
+Every {id}.faa in --dir becomes one record when its three reference images
+are also present:
+
+    {id}.faa
+    {id}_microtubules.png
+    {id}_nucleus.png
+    {id}_er.png
+
+A .faa without all three images is not a complete record. It is left out,
+and its ID and missing files are listed on stderr, so nothing is dropped
+silently. Images without a .faa are ignored.
 
 Local file paths are made absolute (miniWDL requires this); gs:// and other
 URIs are passed through unchanged.
 
 Usage:
     python scripts/make_wdl_inputs.py \
-        --records inputs.json \
-        --weights_file blast_proticelli_weights_v2.zip \
-        --docker blast-proticelli:0.2.0 \
-        --seed 1 --num_inference_steps 10 \
+        --dir test_inputs \
+        --weights-file blast_proticelli_weights_v2.zip \
         -o wdl_inputs.json
 """
 
@@ -39,20 +45,30 @@ def main():
     args = ap.parse_args()
 
     records = []
-    for faa_path in glob(os.path.join(args.dir, "*.faa")):
-        prediction_id = os.path.basename(faa_path).replace(".faa", "")
+    incomplete = []
+    for faa_path in sorted(glob(os.path.join(args.dir, "*.faa"))):
+        prediction_id = os.path.basename(faa_path)[: -len(".faa")]
+        images = {
+            "microtubules_image": faa_path[: -len(".faa")] + "_microtubules.png",
+            "er_image": faa_path[: -len(".faa")] + "_er.png",
+            "nucleus_image": faa_path[: -len(".faa")] + "_nucleus.png",
+        }
+        missing = [os.path.basename(p) for p in images.values() if not os.path.exists(p)]
+        if missing:
+            incomplete.append((prediction_id, missing))
+            continue
+        records.append({
+            "prediction_id": prediction_id,
+            **{key: resolve(path) for key, path in images.items()},
+            "fasta_file": resolve(faa_path),
+        })
 
-        er_path = faa_path.replace(".faa", "_er.png")
-        microtubule_path = faa_path.replace(".faa", "_microtubule.png")
-        nucleus_path = faa_path.replace(".faa", "_nucleus.png")
-        if os.path.exists(er_path) and os.path.exists(microtubule_path) and os.path.exists(nucleus_path):
-            records.append({
-                "prediction_id": prediction_id,
-                "microtubules_image": resolve(microtubule_path),
-                "er_image": resolve(er_path),
-                "nucleus_image": resolve(nucleus_path),
-                "fasta_file": resolve(faa_path),
-            })
+    if incomplete:
+        print(f"WARNING: {len(incomplete)} .faa file(s) left out, missing reference images:", file=sys.stderr)
+        for prediction_id, missing in incomplete:
+            print(f"  {prediction_id}: {', '.join(missing)}", file=sys.stderr)
+    if not records:
+        sys.exit(f"ERROR: no complete records in {args.dir}")
 
     inputs = {
         f"{WORKFLOW}.records": records,

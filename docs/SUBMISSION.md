@@ -36,7 +36,7 @@ Only one step happens off AnVIL: building and publishing the image. The weights 
 | File | Purpose | Submitted? |
 |---|---|---|
 | `submission.wdl` | Meets the contract. Image fixed by digest; returns predictions only | Yes |
-| `submission_test.wdl` | Runs `submission.wdl` unchanged on AnVIL. Cromwell, the engine behind AnVIL Workflows, runs workflows, and the contract allows no workflow block in the submitted file, so this file adds only that | No |
+| `submission_test.wdl` | The AnVIL test of `submission.wdl`, generated from it by `scripts/make_submission_test.py`. It adds what the organizers add to their copy: the reference resources (8 CPU, 32 GB, 75 GB SSD, one L4) and a workflow block, since Cromwell, the engine behind AnVIL Workflows, runs workflows. Everything else is copied unchanged | No |
 | `blast_proticelli.wdl` | Development: image as an input, results table as an output, resources settable | No |
 
 All three run the same `run_inference.py` command. The model also writes `prediction_results.tsv` (BLAST match and status per record); `submission.wdl` keeps it out of `predictions/`, and the task log carries the same information one line per record.
@@ -68,7 +68,14 @@ runtime {
 }
 ```
 
-Commit that change. The registry repository must allow anonymous pulls (on Quay, set it to public).
+Then regenerate the AnVIL test copy, so it carries the same digest, and commit both:
+
+```bash
+python scripts/make_submission_test.py
+git commit -am "Pin submission image to <digest>"
+```
+
+`python scripts/make_submission_test.py --check` reports whether the test copy matches `submission.wdl`. The registry repository must allow anonymous pulls (on Quay, set it to public).
 
 Optional check while Docker is at hand: run the image with networking turned off (see [Developer route](#developer-route)).
 
@@ -104,7 +111,7 @@ python scripts/make_wdl_inputs.py --dir test_inputs \
 
 **Run.** In the workspace's **Workflows** tab:
 
-1. Add `submission_test.wdl` from this repository through Dockstore (Dockstore follows the repository and resolves the import of `submission.wdl`). **OPEN:** Dockstore entry and screenshots.
+1. Add `submission_test.wdl` from this repository through Dockstore. The repository's `.dockstore.yml` registers it, and Dockstore follows the repository, so a pushed change appears there. **OPEN:** screenshots.
 2. Choose "Run workflow with inputs defined by file paths".
 3. Upload `submission_test_inputs.json`.
 4. Launch.

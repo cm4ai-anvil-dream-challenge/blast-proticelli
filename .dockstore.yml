@@ -1,0 +1,16 @@
+# Registers this repository's workflows with Dockstore (https://dockstore.org),
+# so AnVIL's Workflows tab can import them. Dockstore reads this file through
+# its GitHub App and updates its entries when the listed branches change.
+# Docs: https://dockstore.readthedocs.io/en/stable/getting-started/github-apps/github-apps.html
+
+version: 1.2
+workflows:
+  # AnVIL test of the challenge submission: runs submission.wdl unchanged.
+  - name: blast-proticelli-submission-test
+    subclass: WDL
+    primaryDescriptorPath: /submission_test.wdl
+    readMePath: /docs/SUBMISSION.md
+    filters:
+      branches:
+        - main
+        - feature/submission-wdl

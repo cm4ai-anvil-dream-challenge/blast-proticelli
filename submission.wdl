@@ -47,6 +47,6 @@ task Predict {
   }
 
   runtime {
-    docker: "quay.io/ohsu-comp-bio/blast-proticelli-example@sha256:REPLACE_WITH_IMAGE_DIGEST"
+    docker: "quay.io/ohsu-comp-bio/blast-proticelli-example@sha256:3f8b3178ae182fcf852163347574f98e7661aa0f0ce76f1f92993fe2b2e697ff"
   }
 }
